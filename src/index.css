@@ -1,0 +1,593 @@
+@import 'tailwindcss';
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --apple-blue: #007AFF;
+  --apple-blue-hover: #0066D6;
+  --apple-green: #34C759;
+  --apple-orange: #FF9500;
+  --apple-red: #FF3B30;
+  --apple-bg: #F5F5F7;
+  --apple-surface: rgba(255, 255, 255, 0.72);
+  --apple-text: #1D1D1F;
+  --apple-text-secondary: #6E6E73;
+  --apple-border: rgba(0, 0, 0, 0.06);
+  --apple-shadow: 0 2px 20px rgba(0, 0, 0, 0.06);
+  --apple-shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.1);
+  --apple-header-bg: rgba(255, 255, 255, 0.75);
+  --apple-bar-bg: rgba(255, 255, 255, 0.6);
+  --apple-footer-bg: rgba(255, 255, 255, 0.8);
+  --apple-radius: 20px;
+  --apple-radius-sm: 12px;
+  --apple-radius-lg: 28px;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --apple-bg: #0A0A0C;
+  --apple-surface: rgba(28, 28, 30, 0.78);
+  --apple-text: #F5F5F7;
+  --apple-text-secondary: #98989D;
+  --apple-border: rgba(255, 255, 255, 0.08);
+  --apple-shadow: 0 2px 24px rgba(0, 0, 0, 0.45);
+  --apple-shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.55);
+  --apple-header-bg: rgba(22, 22, 24, 0.82);
+  --apple-bar-bg: rgba(22, 22, 24, 0.72);
+  --apple-footer-bg: rgba(22, 22, 24, 0.88);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  user-select: text;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--apple-bg);
+  color: var(--apple-text);
+}
+
+/* Ambient app shell */
+.app-shell {
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%, rgba(0, 122, 255, 0.07), transparent 50%),
+    radial-gradient(ellipse 60% 50% at 90% 100%, rgba(175, 82, 222, 0.05), transparent 50%),
+    var(--apple-bg);
+}
+
+[data-theme="dark"] .app-shell {
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%, rgba(0, 122, 255, 0.14), transparent 50%),
+    radial-gradient(ellipse 60% 50% at 90% 100%, rgba(175, 82, 222, 0.1), transparent 50%),
+    var(--apple-bg);
+}
+
+.app-header {
+  background: var(--apple-header-bg);
+  border-color: var(--apple-border);
+}
+
+.app-bar {
+  background: var(--apple-bar-bg);
+  border-color: var(--apple-border);
+}
+
+.app-footer {
+  background: var(--apple-footer-bg);
+  border-color: var(--apple-border);
+}
+
+.theme-segment {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .theme-segment {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-segment-btn-active {
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .theme-segment-btn-active {
+  background: rgba(58, 58, 60, 0.95);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.theme-panel {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+[data-theme="dark"] .theme-panel {
+  background: rgba(44, 44, 46, 0.96);
+}
+
+.theme-input {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--apple-border);
+  color: var(--apple-text);
+}
+
+[data-theme="dark"] .theme-input {
+  background: rgba(58, 58, 60, 0.92);
+}
+
+.theme-muted {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .theme-muted {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-chip {
+  background: #fafafa;
+  border: 1px solid #f4f4f5;
+}
+
+[data-theme="dark"] .theme-chip {
+  background: rgba(58, 58, 60, 0.85);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.theme-badge {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--apple-border);
+  color: var(--apple-text);
+}
+
+[data-theme="dark"] .theme-badge {
+  background: rgba(58, 58, 60, 0.88);
+}
+
+[data-theme="dark"] .text-zinc-700 {
+  color: var(--apple-text);
+}
+
+[data-theme="dark"] .text-zinc-600 {
+  color: var(--apple-text-secondary);
+}
+
+[data-theme="dark"] .text-zinc-400,
+[data-theme="dark"] .text-zinc-300 {
+  color: #636366;
+}
+
+[data-theme="dark"] .hover\:bg-black\/\[0\.04\]:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .border-black\/5,
+[data-theme="dark"] .border-black\/8 {
+  border-color: var(--apple-border);
+}
+
+[data-theme="dark"] .bg-zinc-50 {
+  background-color: rgba(58, 58, 60, 0.75);
+}
+
+[data-theme="dark"] .bg-zinc-100 {
+  background-color: rgba(72, 72, 74, 0.75);
+}
+
+[data-theme="dark"] .border-zinc-100,
+[data-theme="dark"] .border-zinc-200 {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .bg-white {
+  background-color: rgba(44, 44, 46, 0.95);
+}
+
+[data-theme="dark"] .text-darkDelegation {
+  color: var(--apple-text);
+}
+
+.theme-designer-canvas {
+  --flow-dot-color: #bbbbbb;
+}
+
+[data-theme="dark"] .bg-green-50 {
+  background-color: rgba(52, 199, 89, 0.12);
+}
+
+[data-theme="dark"] .bg-red-50 {
+  background-color: rgba(255, 59, 48, 0.12);
+}
+
+[data-theme="dark"] .bg-orange-50 {
+  background-color: rgba(255, 149, 0, 0.12);
+}
+
+[data-theme="dark"] .text-green-800,
+[data-theme="dark"] .text-green-900 {
+  color: #34C759;
+}
+
+[data-theme="dark"] .text-red-700,
+[data-theme="dark"] .text-red-600 {
+  color: #FF6961;
+}
+
+[data-theme="dark"] .text-orange-700 {
+  color: #FFB340;
+}
+
+[data-theme="dark"] .border-green-200,
+[data-theme="dark"] .border-red-200,
+[data-theme="dark"] .border-orange-200 {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .theme-designer-canvas {
+  --flow-dot-color: rgba(255, 255, 255, 0.12);
+}
+
+.theme-modal-panel {
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--apple-border);
+}
+
+[data-theme="dark"] .theme-modal-panel {
+  background: rgba(44, 44, 46, 0.98);
+}
+
+[data-theme="dark"] .bg-white\/60,
+[data-theme="dark"] .bg-white\/80 {
+  background-color: rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] .bg-emerald-50 {
+  background-color: rgba(52, 199, 89, 0.12);
+}
+
+[data-theme="dark"] .text-emerald-600,
+[data-theme="dark"] .text-emerald-400 {
+  color: #34C759;
+}
+
+[data-theme="dark"] .bg-blue-50\/80 {
+  background-color: rgba(0, 122, 255, 0.12);
+}
+
+[data-theme="dark"] .border-blue-100 {
+  border-color: rgba(0, 122, 255, 0.25);
+}
+
+[data-theme="dark"] .bg-amber-50\/80 {
+  background-color: rgba(255, 149, 0, 0.12);
+}
+
+[data-theme="dark"] .border-amber-100 {
+  border-color: rgba(255, 149, 0, 0.25);
+}
+
+[data-theme="dark"] .bg-rose-50\/80 {
+  background-color: rgba(255, 59, 48, 0.12);
+}
+
+[data-theme="dark"] .border-rose-100 {
+  border-color: rgba(255, 59, 48, 0.25);
+}
+
+[data-theme="dark"] .bg-lime-50\/80 {
+  background-color: rgba(52, 199, 89, 0.12);
+}
+
+[data-theme="dark"] .bg-orange-50\/40 {
+  background-color: rgba(255, 149, 0, 0.1);
+}
+
+[data-theme="dark"] .text-orange-800,
+[data-theme="dark"] .text-orange-700 {
+  color: #FFB340;
+}
+
+[data-theme="dark"] .border-orange-100,
+[data-theme="dark"] .border-orange-200\/80 {
+  border-color: rgba(255, 149, 0, 0.22);
+}
+
+.panel-sidebar {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-color: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="dark"] .panel-sidebar {
+  background: rgba(28, 28, 30, 0.62);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.apple-card {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: var(--apple-radius-sm);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .apple-card {
+  background: rgba(44, 44, 46, 0.92);
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.apple-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--apple-text-secondary);
+}
+
+.preview-frame {
+  position: relative;
+  border-radius: var(--apple-radius-lg);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 24px 80px -12px rgba(0, 0, 0, 0.15);
+}
+
+.preview-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.8), rgba(0,122,255,0.15));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 2;
+}
+
+
+button,
+a {
+  cursor: pointer;
+}
+
+.font-sans {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+}
+
+@theme {
+  --color-darkDelegation: #1D1D1F;
+  --color-appleBlue: #007AFF;
+  --color-appleGreen: #34C759;
+  --color-appleGray: #8E8E93;
+  --color-appleBg: #F5F5F7;
+  --color-appleSurface: rgba(255, 255, 255, 0.72);
+}
+
+/* Apple glass panel */
+.glass-panel {
+  background: var(--apple-surface);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--apple-border);
+  box-shadow: var(--apple-shadow);
+}
+
+.glass-panel-elevated {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(60px) saturate(200%);
+  -webkit-backdrop-filter: blur(60px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: var(--apple-shadow-lg);
+}
+
+[data-theme="dark"] .glass-panel-elevated {
+  background: rgba(44, 44, 46, 0.92);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Smooth transitions */
+.transition-apple {
+  transition: all 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.view-mode-enter {
+  animation: view-mode-in 0.4s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+@keyframes view-mode-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Live pulse indicator */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.15); }
+}
+
+.live-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* Scene loading */
+@keyframes scene-load-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.03); opacity: 1; }
+}
+
+@keyframes scene-load-pulse-ring {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.4; }
+}
+
+@keyframes scene-load-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+.scene-load-icon {
+  animation: scene-load-breathe 2.4s ease-in-out infinite;
+}
+
+.scene-load-pulse {
+  animation: scene-load-pulse-ring 1.8s ease-in-out infinite;
+}
+
+.scene-load-dot {
+  animation: scene-load-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .scene-load-icon,
+  .scene-load-pulse,
+  .scene-load-dot,
+  .animate-bubble-attention,
+  .go-live-shimmer,
+  .animate-modal-in,
+  .view-mode-enter {
+    animation: none !important;
+  }
+
+  .transition-apple {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Agent head bubble — gentle attention for urgent states */
+@keyframes bubble-attention {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+.animate-bubble-attention {
+  animation: bubble-attention 2.5s ease-in-out infinite;
+}
+
+/* Modal entrance */
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.animate-modal-in {
+  animation: modal-in 0.35s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+.modal-overlay {
+  z-index: 650;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.go-live-shimmer {
+  background: linear-gradient(
+    90deg,
+    #007AFF 0%,
+    #5AC8FA 25%,
+    #007AFF 50%,
+    #5AC8FA 75%,
+    #007AFF 100%
+  );
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* Markdown */
+.markdown-content p {
+  @apply mb-3 last:mb-0;
+}
+.markdown-content ul,
+.markdown-content ol {
+  @apply mb-3 ml-4 last:mb-0;
+}
+.markdown-content ul {
+  @apply list-disc;
+}
+.markdown-content ol {
+  @apply list-decimal;
+}
+.markdown-content li {
+  @apply mb-1;
+}
+.markdown-content strong {
+  @apply font-semibold text-zinc-700/90;
+}
+.markdown-content em {
+  @apply italic;
+}
+
+/* React Flow overrides for Apple style */
+.react-flow__controls {
+  border-radius: var(--apple-radius-sm) !important;
+  overflow: hidden;
+  box-shadow: var(--apple-shadow) !important;
+  border: 1px solid var(--apple-border) !important;
+}
+.react-flow__controls-button {
+  background: white !important;
+  border-bottom: 1px solid var(--apple-border) !important;
+}
+
+.react-flow__background {
+  background: #fafafa !important;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+[data-theme="dark"] .markdown-content strong {
+  @apply text-zinc-200/90;
+}
+
+[data-theme="dark"] .react-flow__background {
+  background: #1c1c1e !important;
+}
+
+[data-theme="dark"] .react-flow__controls-button {
+  background: #2c2c2e !important;
+  color: #f5f5f7 !important;
+}
+
+/* Focus rings */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(0, 122, 255, 0.5);
+  outline-offset: 2px;
+}
