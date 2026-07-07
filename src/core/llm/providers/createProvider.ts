@@ -1,5 +1,6 @@
 import type { LLMConfig } from '../types';
 import { getProviderConfig, normalizeProviderId } from '../constants';
+import { AnthropicProvider } from './AnthropicProvider';
 import { GeminiProvider } from './GeminiProvider';
 import { OpenAIProvider } from './OpenAIProvider';
 
@@ -12,6 +13,10 @@ export function createTextProvider(config: LLMConfig) {
 
   if (providerId === 'openai') {
     return new OpenAIProvider(apiKey, config.baseUrl);
+  }
+
+  if (providerId === 'anthropic') {
+    return new AnthropicProvider(apiKey, config.baseUrl);
   }
 
   return new GeminiProvider(apiKey);

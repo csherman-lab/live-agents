@@ -22,7 +22,7 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
     id: 'landing-page',
     title: 'Launch Landing Page',
     description: 'Copy, design & dev for a product launch',
-    teamId: 'unboring-net',
+    teamId: 'creative-agency',
     icon: Rocket,
     brief: `Create a high-converting landing page for a new SaaS product called "FlowState" — an AI productivity app for creative teams.
 

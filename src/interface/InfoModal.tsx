@@ -30,6 +30,9 @@ const InfoModal: React.FC<InfoModalProps> = ({ open, onClose }) => (
       <p>
         Design mode lets you customize teams, roles, and workflows. Agent memory, activity logs, and cost tracking persist across sessions — all stored locally in your browser.
       </p>
+      <p className="text-[12px] text-[var(--apple-text-secondary)] pt-2 border-t" style={{ borderColor: 'var(--apple-border)' }}>
+        Built by Cameron Sherman · <a href="https://github.com/csherman-lab/live-agents" target="_blank" rel="noopener noreferrer" className="text-appleBlue hover:underline">GitHub</a>
+      </p>
     </div>
   </Modal>
 );

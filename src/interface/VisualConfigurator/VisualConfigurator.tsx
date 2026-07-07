@@ -301,7 +301,7 @@ const VisualConfiguratorContent: React.FC = () => {
                 <button
                   onClick={handleAddAgent}
                   disabled={characters.length >= MAX_AGENTS + 1}
-                  className={`flex items-center gap-2 px-8 py-3 bg-darkDelegation text-white rounded-xl text-[10px] font-black uppercase tracking-[0.1em] shadow-lg shadow-black/5 transition-all ${characters.length >= MAX_AGENTS + 1
+                  className={`flex items-center gap-2 px-8 py-3 bg-ink text-white rounded-xl text-[10px] font-black uppercase tracking-[0.1em] shadow-lg shadow-black/5 transition-all ${characters.length >= MAX_AGENTS + 1
                     ? 'opacity-40 cursor-not-allowed grayscale'
                     : 'hover:bg-black hover:scale-105 active:scale-95'
                     }`}

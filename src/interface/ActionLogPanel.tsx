@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronRight, Copy, Download, Eye, Filter, MessageSquare, Terminal, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getAgentSet, getAllAgents } from '../data/agents'
 import { USER_COLOR, USER_COLOR_LIGHT } from '../theme/brand'
 import { DebugLogEntry, useCoreStore } from '../integration/store/coreStore'
@@ -79,7 +80,7 @@ ${JSON.stringify(entry.raw, null, 2)}
                             <div className="flex flex-col gap-1 overflow-hidden">
                                 <div className="flex items-center gap-2">
                                     <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: agent?.color ?? '#ccc' }} />
-                                    <span className="text-[10px] font-black text-darkDelegation uppercase tracking-widest leading-none truncate">
+                                    <span className="text-[10px] font-black text-ink uppercase tracking-widest leading-none truncate">
                                         {agent?.name}
                                     </span>
                                 </div>
@@ -217,12 +218,12 @@ ${JSON.stringify(entry.raw, null, 2)}
                                                     {m.tool_calls && m.tool_calls.length > 0 && (
                                                         <div className="space-y-2 mt-2">
                                                             {m.tool_calls.map((tc: any, idx: number) => (
-                                                                <div key={idx} className="bg-darkDelegation rounded-lg overflow-hidden border border-darkDelegation shadow-lg">
-                                                                    <div className="bg-darkDelegation px-2.5 py-1.5 flex items-center justify-between">
+                                                                <div key={idx} className="bg-ink rounded-lg overflow-hidden border border-ink shadow-lg">
+                                                                    <div className="bg-ink px-2.5 py-1.5 flex items-center justify-between">
                                                                         <span className="text-[9px] font-black text-emerald-400 font-mono tracking-wider">{tc.function?.name}</span>
                                                                         <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-tighter">Call</span>
                                                                     </div>
-                                                                    <div className="p-2.5 bg-darkDelegation/50">
+                                                                    <div className="p-2.5 bg-ink/50">
                                                                         <pre className="text-[9px] text-zinc-300 font-mono wrap-break-word whitespace-pre-wrap">
                                                                             {tc.function?.arguments}
                                                                         </pre>
@@ -269,18 +270,18 @@ ${JSON.stringify(entry.raw, null, 2)}
                                                 let args: Record<string, unknown> | null = null;
                                                 try { args = JSON.parse(tc.function?.arguments ?? '{}'); } catch { args = (tc as any).args ?? null; }
                                                 return (
-                                                    <div key={i} className="bg-darkDelegation rounded-lg overflow-hidden border border-darkDelegation shadow-lg">
-                                                        <div className="bg-darkDelegation px-2.5 py-1.5 flex items-center justify-between">
+                                                    <div key={i} className="bg-ink rounded-lg overflow-hidden border border-ink shadow-lg">
+                                                        <div className="bg-ink px-2.5 py-1.5 flex items-center justify-between">
                                                             <span className="text-[10px] font-black text-emerald-400 font-mono tracking-wider">{name}</span>
                                                             <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-tighter">Arguments</span>
                                                         </div>
-                                                        <div className="p-2.5 bg-darkDelegation/50">
+                                                        <div className="p-2.5 bg-ink/50">
                                                             {args && Object.keys(args).length > 0 ? (
                                                                 <div className="space-y-1.5">
                                                                     {Object.entries(args).map(([key, value]) => (
                                                                         <div key={key} className="flex flex-col gap-0.5">
                                                                             <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-tighter">{key}</span>
-                                                                            <div className="text-[9px] text-zinc-300 font-mono bg-darkDelegation/50 p-1.5 rounded border border-zinc-700/50 wrap-break-word whitespace-pre-wrap">
+                                                                            <div className="text-[9px] text-zinc-300 font-mono bg-ink/50 p-1.5 rounded border border-zinc-700/50 wrap-break-word whitespace-pre-wrap">
                                                                                 {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
                                                                             </div>
                                                                         </div>
@@ -311,7 +312,7 @@ ${JSON.stringify(entry.raw, null, 2)}
                                             <CopyButton text={JSON.stringify(entry.raw, null, 2)} />
                                         </div>
                                     </summary>
-                                    <pre className="mt-1.5 text-[9px] bg-darkDelegation text-zinc-400 p-2 rounded leading-relaxed whitespace-pre overflow-x-auto font-mono border border-darkDelegation">
+                                    <pre className="mt-1.5 text-[9px] bg-ink text-zinc-400 p-2 rounded leading-relaxed whitespace-pre overflow-x-auto font-mono border border-ink">
                                         {JSON.stringify(entry.raw, null, 2)}
                                     </pre>
                                 </details>
@@ -331,6 +332,30 @@ export function ActionLogPanel() {
     const [activeTab, setActiveTab] = useState<'activity' | 'technical'>('technical')
     const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false)
     const topRef = useRef<HTMLDivElement>(null)
+    const filterButtonRef = useRef<HTMLButtonElement>(null)
+    const [filterMenuStyle, setFilterMenuStyle] = useState<React.CSSProperties>({})
+
+    useEffect(() => {
+        if (!isFilterMenuOpen) return
+        const updatePosition = () => {
+            const rect = filterButtonRef.current?.getBoundingClientRect()
+            if (!rect) return
+            setFilterMenuStyle({
+                position: 'fixed',
+                top: rect.bottom + 4,
+                right: Math.max(8, window.innerWidth - rect.right),
+                width: 192,
+                zIndex: 10001,
+            })
+        }
+        updatePosition()
+        window.addEventListener('resize', updatePosition)
+        window.addEventListener('scroll', updatePosition, true)
+        return () => {
+            window.removeEventListener('resize', updatePosition)
+            window.removeEventListener('scroll', updatePosition, true)
+        }
+    }, [isFilterMenuOpen])
 
     const handleDownloadAll = () => {
         const content = debugLog.map(entry => {
@@ -370,7 +395,7 @@ ${JSON.stringify(entry.raw, null, 2)}
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `the-delegation-technical-logs-${Date.now()}.txt`;
+        a.download = `live-agents-technical-logs-${Date.now()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
     };
@@ -419,43 +444,53 @@ ${JSON.stringify(entry.raw, null, 2)}
                 <div className="flex items-center gap-1 shrink-0">
                     <div className="relative">
                         <button
+                            ref={filterButtonRef}
+                            type="button"
                             onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
                             className={`p-1.5 rounded-lg transition-apple ${isFilterMenuOpen || logFilterAgentIndex !== null
                                 ? 'bg-appleBlue text-white'
                                 : 'text-zinc-400 hover:text-zinc-600 hover:bg-black/[0.04]'
                                 }`}
                             title="Filter by agent"
+                            aria-expanded={isFilterMenuOpen}
                         >
                             <Filter size={14} />
                         </button>
 
-                        {isFilterMenuOpen && (
+                        {isFilterMenuOpen && createPortal(
                             <>
                                 <div
-                                    className="fixed inset-0 z-20"
-                                    onClick={() => setIsFilterMenuOpen(false)}
+                                    className="fixed inset-0 z-[10000]"
+                                    onPointerDown={() => setIsFilterMenuOpen(false)}
+                                    aria-hidden
                                 />
-                                <div className="absolute right-0 mt-2 w-48 theme-panel border rounded-xl shadow-xl z-30 py-1.5 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200" style={{ borderColor: 'var(--apple-border)' }}>
+                                <div
+                                    className="theme-panel border rounded-xl shadow-xl py-1.5 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+                                    style={{ ...filterMenuStyle, borderColor: 'var(--apple-border)' }}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                >
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             setLogOpen(true, null);
                                             setIsFilterMenuOpen(false);
                                         }}
-                                        className={`w-full px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-zinc-50 transition-colors ${logFilterAgentIndex === null ? 'text-darkDelegation' : 'text-zinc-400'
+                                        className={`w-full px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-zinc-50 transition-colors touch-manipulation ${logFilterAgentIndex === null ? 'text-ink' : 'text-zinc-400'
                                             }`}
                                     >
-                                        <div className={`w-2 h-2 rounded-full ${logFilterAgentIndex === null ? 'bg-darkDelegation' : 'bg-transparent border border-zinc-200'}`} />
+                                        <div className={`w-2 h-2 rounded-full ${logFilterAgentIndex === null ? 'bg-ink' : 'bg-transparent border border-zinc-200'}`} />
                                         All Agents
                                     </button>
                                     <div className="h-px bg-zinc-50 my-1" />
                                     {agents.map((agent) => (
                                         <button
                                             key={agent.index}
+                                            type="button"
                                             onClick={() => {
                                                 setLogOpen(true, agent.index);
                                                 setIsFilterMenuOpen(false);
                                             }}
-                                            className={`w-full px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-zinc-50 transition-colors ${logFilterAgentIndex === agent.index ? 'text-darkDelegation' : 'text-zinc-400'
+                                            className={`w-full px-4 py-2 text-left text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-zinc-50 transition-colors touch-manipulation ${logFilterAgentIndex === agent.index ? 'text-ink' : 'text-zinc-400'
                                                 }`}
                                         >
                                             <div
@@ -466,14 +501,15 @@ ${JSON.stringify(entry.raw, null, 2)}
                                         </button>
                                     ))}
                                 </div>
-                            </>
+                            </>,
+                            document.body,
                         )}
                     </div>
 
                     {activeTab === 'technical' && debugEntries.length > 0 && (
                         <button
                             onClick={handleDownloadAll}
-                            className="text-zinc-400 hover:text-darkDelegation transition-colors p-1 rounded hover:bg-zinc-50 cursor-pointer"
+                            className="text-zinc-400 hover:text-ink transition-colors p-1 rounded hover:bg-zinc-50 cursor-pointer"
                             title="Download all as .txt"
                         >
                             <Download size={14} />
@@ -518,7 +554,7 @@ ${JSON.stringify(entry.raw, null, 2)}
                                                 className="w-1.5 h-1.5 rounded-full shadow-sm"
                                                 style={{ backgroundColor: agent?.color ?? '#e4e4e7' }}
                                             />
-                                            <span className="text-[10px] font-black text-darkDelegation uppercase tracking-widest leading-none">
+                                            <span className="text-[10px] font-black text-ink uppercase tracking-widest leading-none">
                                                 {agent?.name ?? 'System'}
                                             </span>
                                         </div>

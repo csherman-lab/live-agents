@@ -5,7 +5,7 @@ export const USER_ID = 'user';
 export const USER_NAME = 'User';
 export const MAX_AGENTS = 5;
 export { USER_COLOR };
-export const DEFAULT_AGENTIC_SET_ID = 'unboring-net';
+export const DEFAULT_AGENTIC_SET_ID = 'creative-agency';
 export interface AgentNode {
   id: string;
   index: number;
@@ -38,8 +38,8 @@ export interface AgenticSystem {
 
 export const AGENTIC_SETS: AgenticSystem[] = [
   {
-    id: 'unboring-net',
-    teamName: 'unboring.net',
+    id: 'creative-agency',
+    teamName: 'Creative Agency',
     teamType: 'Agency',
     teamDescription: 'A full-service creative agency covering branding, design, development and go-to-market strategy.',
     color: '#4285F4',

@@ -55,23 +55,23 @@ const STEPS: Step[] = [
     eyebrow: 'Welcome',
     title: 'Meet Live Agents',
     lead:
-      'A calm, Apple-inspired command center where AI agents work in a living 3D office — you brief, they deliver.',
+      'A calm command center where AI agents collaborate — in chat, in tasks, or in a living 3D office when WebGPU is available.',
     bullets: [
-      'Watch your team move, collaborate, and ship in real time',
-      'One overview for briefs, teams, templates, and deliverables',
-      'Go Live when you are ready for the full immersive workspace',
+      'Start text-first: brief, chat, and approve work without 3D',
+      'Go Live for the immersive office when your browser supports WebGPU',
+      'Gemini, OpenAI, or Anthropic — keys stay local in your browser',
     ],
   },
   {
     id: 'workspace',
     eyebrow: 'The workspace',
-    title: 'A living 3D office',
+    title: 'Overview or immersive 3D',
     lead:
-      'Agents are not rows in a chat log. They occupy desks, walk between stations, and show status as they work.',
+      'Use Command Center for planning and chat. Enter the 3D office when you want spatial presence — optional, not required.',
     bullets: [
-      'Spatial layout mirrors how real teams collaborate',
-      'Speech bubbles surface what each agent is doing',
-      'Overview mode keeps planning separate from immersion',
+      'Chat with your lead agent from overview — no WebGPU needed',
+      '3D office shows agents at desks when WebGPU is available',
+      'Retry or open in another browser if 3D fails to load',
     ],
   },
   {
@@ -103,11 +103,11 @@ const STEPS: Step[] = [
     eyebrow: 'Quick setup',
     title: 'Connect and configure',
     lead:
-      'Add your Gemini API key and tune your team. You can always change these in Settings later.',
+      'Add an API key for Gemini, OpenAI, or Anthropic. You can always change provider and model in Settings.',
     bullets: [
-      'API keys stay local in your browser',
-      'Light, dark, or auto appearance in Settings',
-      'Try Explore demo without an API key',
+      'API keys stay local in your browser — never sent to our servers',
+      'OpenAI and Anthropic are text-only; use Gemini for image/music/video teams',
+      'Try Explore demo to browse without a key',
     ],
   },
   {
@@ -115,10 +115,10 @@ const STEPS: Step[] = [
     eyebrow: 'Ready',
     title: 'Enter the workspace',
     lead:
-      'You are set. Open the Command Center, or jump straight into Go Live.',
+      'You are set. Brief your team, chat from overview, or jump into Go Live.',
     bullets: [
-      'Press G anytime to toggle Go Live',
-      'Press ? for keyboard shortcuts',
+      'G — Go Live · S — Settings · ? — all shortcuts',
+      'Chat with lead agent from Command Center (text-first)',
       'Replay this intro from Settings anytime',
     ],
   },
@@ -233,7 +233,7 @@ function StepVisual({
         {
           id: 'api',
           ok: hasApiKey,
-          title: 'Gemini API key',
+          title: 'AI provider',
           detail: hasApiKey ? 'Connected' : 'Required to run agents',
           action: hasApiKey ? null : 'Add key',
           onAction: onOpenSettings,

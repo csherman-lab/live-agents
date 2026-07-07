@@ -19,6 +19,7 @@ interface SimulationViewProps {
   setIsFullscreen: (value: boolean) => void;
   sceneReady?: boolean;
   sceneError?: boolean;
+  onRetryScene?: () => void;
 }
 
 const SimulationView: React.FC<SimulationViewProps> = ({
@@ -27,6 +28,7 @@ const SimulationView: React.FC<SimulationViewProps> = ({
   setIsFullscreen,
   sceneReady = true,
   sceneError = false,
+  onRetryScene,
 }) => {
   const { selectedNpcIndex, activeAuditTaskId, setActiveAuditTaskId } = useUiStore();
   const { phase, resetProject } = useCoreStore();
@@ -80,7 +82,7 @@ const SimulationView: React.FC<SimulationViewProps> = ({
 
       <div ref={canvasRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ background: 'var(--apple-bg)' }}>
         {sceneError ? (
-          <WebGPUFallbackOverlay />
+          <WebGPUFallbackOverlay onRetry={onRetryScene} />
         ) : (
           <SceneLoadingOverlay visible={!sceneReady} />
         )}

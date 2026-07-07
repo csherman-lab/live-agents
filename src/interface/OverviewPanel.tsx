@@ -1,10 +1,12 @@
 import {
   ArrowRight,
   Clock,
+  Download,
   Eye,
   FileText,
   FolderOpen,
   Layers,
+  MessageSquare,
   Package,
   Play,
   Radio,
@@ -23,10 +25,12 @@ import { toast } from '../integration/store/toastStore';
 import { useTeamStore, useActiveTeam } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
 import { APPLE_BLUE, APPLE_TEXT, APPLE_TEXT_SECONDARY, withHexAlpha } from '../theme/brand';
-import { exportProjectDeliverables } from '../utils/exportProject';
+import { exportProjectBundle, exportProjectDeliverables } from '../utils/exportProject';
 import { TeamBadge } from './components/TeamBadge';
+import ProviderOutputBanner from './components/ProviderOutputBanner';
 import OverviewStatusModals, { type StatusCardId } from './OverviewStatusModals';
 import ApprovalInbox from './ApprovalInbox';
+import OverviewChatDrawer from './OverviewChatDrawer';
 
 interface OverviewPanelProps {
   onGoLive: () => void;
@@ -36,6 +40,7 @@ interface OverviewPanelProps {
 
 const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive, onManageTeams, onExploreDemo }) => {
   const [openCard, setOpenCard] = useState<StatusCardId | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const { phase, tasks, userBrief, setUserBrief, setFinalOutputOpen, resetProject } = useCoreStore();
   const { llmConfig, setSettingsOpen, isDemoMode } = useUiStore();
   const { customSystems } = useTeamStore();
@@ -72,8 +77,18 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive, onManageTeams, 
     toast('Brief saved to history', 'success');
   };
 
+  const handleExportBundle = async () => {
+    try {
+      await exportProjectBundle();
+      toast('Project bundle exported', 'success');
+    } catch {
+      toast('Export failed', 'error');
+    }
+  };
+
   return (
     <div className="flex flex-col h-full min-h-0">
+      {chatOpen && <OverviewChatDrawer onClose={() => setChatOpen(false)} />}
       <div className="flex-1 overflow-y-auto overscroll-contain min-h-0">
         <div className="px-5 pt-5 pb-4">
           <div className="flex items-center gap-2 mb-1">
@@ -84,12 +99,37 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive, onManageTeams, 
             Your Agent Workspace
           </h1>
           <p className="text-[13px] leading-relaxed" style={{ color: APPLE_TEXT_SECONDARY }}>
-            Configure your team and watch agents collaborate in 3D.
+            Brief your team, chat without 3D, or go live in the immersive office when WebGPU is available.
+          </p>
+          <p className="text-[11px] mt-2 leading-relaxed text-zinc-400">
+            Live Agents is a local-first agent orchestrator — not a hosted backend. Keys stay in your browser.
           </p>
         </div>
 
+        <ProviderOutputBanner onOpenSettings={() => setSettingsOpen(true)} onManageTeams={onManageTeams} />
+
+        <div className="px-5 pb-4">
+          <button
+            type="button"
+            onClick={() => setChatOpen(true)}
+            disabled={!hasKey || isDemoMode}
+            className="w-full apple-card p-3.5 flex items-center gap-3 hover:shadow-md transition-apple text-left group disabled:opacity-50"
+          >
+            <div className="w-9 h-9 rounded-xl bg-appleBlue/10 flex items-center justify-center shrink-0">
+              <MessageSquare size={16} className="text-appleBlue" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold" style={{ color: APPLE_TEXT }}>Chat with lead agent</p>
+              <p className="text-[11px]" style={{ color: APPLE_TEXT_SECONDARY }}>
+                {hasKey && !isDemoMode ? 'Text-first — no 3D required' : 'Add an API key to chat from overview'}
+              </p>
+            </div>
+            <ArrowRight size={15} className="text-zinc-300 group-hover:text-appleBlue shrink-0" />
+          </button>
+        </div>
+
         {phase === 'done' && (
-          <div className="px-5 pb-3">
+          <div className="px-5 pb-3 flex flex-col gap-2">
             <button
               type="button"
               onClick={() => exportProjectDeliverables()}
@@ -103,6 +143,15 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive, onManageTeams, 
                 <p className="text-[11px] text-green-700/80">View output and export deliverables</p>
               </div>
               <ArrowRight size={14} className="text-green-400 group-hover:text-appleGreen shrink-0" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleExportBundle()}
+              className="w-full py-2.5 rounded-xl text-[12px] font-semibold flex items-center justify-center gap-2 border theme-badge hover:opacity-90 transition-apple"
+              style={{ color: APPLE_TEXT }}
+            >
+              <Download size={14} />
+              Export full project bundle
             </button>
           </div>
         )}
@@ -318,7 +367,7 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive, onManageTeams, 
             <div className="flex-1 min-w-0">
               <p className="text-[13px] font-semibold" style={{ color: APPLE_TEXT }}>Settings & API Keys</p>
               <p className="text-[11px]" style={{ color: APPLE_TEXT_SECONDARY }}>
-                {hasKey ? 'API connected · Tap to configure' : 'Add your Gemini key to get started'}
+                {hasKey ? 'API connected · Gemini, OpenAI, or Anthropic' : 'Add your API key to get started'}
               </p>
             </div>
             <ArrowRight size={15} className="text-zinc-300 group-hover:text-appleBlue transition-apple shrink-0" />

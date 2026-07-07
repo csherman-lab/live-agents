@@ -1,18 +1,20 @@
-import { ArrowLeft, Info, LayoutDashboard, Maximize2, Settings, Users } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Info, LayoutDashboard, Maximize2, Settings, Users } from 'lucide-react';
 import React from 'react';
 import packageJson from '../../package.json';
 import { useCoreStore } from '../integration/store/coreStore';
 import { useUiStore } from '../integration/store/uiStore';
 import { enterWorkspace } from '../integration/enterWorkspace';
+import { openInExternalBrowser } from '../utils/openInBrowser';
 import Logo from './components/Logo';
 
 const version = packageJson.version;
 
 interface HeaderProps {
   onBackToOverview?: () => void;
+  onDismissOnboarding?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onBackToOverview }) => {
+const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }) => {
   const { llmConfig, setSettingsOpen, setAboutOpen, isDemoMode } = useUiStore();
   const { setViewMode, viewMode } = useCoreStore();
   const hasKey = !!llmConfig.apiKey;
@@ -33,8 +35,18 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview }) => {
     }
   };
 
+  const openSettings = () => {
+    onDismissOnboarding?.();
+    setSettingsOpen(true);
+  };
+
+  const openTeams = () => {
+    onDismissOnboarding?.();
+    setViewMode('design');
+  };
+
   return (
-    <header className="app-header h-[52px] border-b flex items-center justify-between px-5 backdrop-blur-2xl shrink-0 relative z-30">
+    <header className="app-header h-[52px] border-b flex items-center justify-between px-5 backdrop-blur-2xl shrink-0 relative z-[620]">
       <div className="flex items-center gap-3 min-w-0">
         {onBackToOverview && (
           <button
@@ -64,7 +76,7 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview }) => {
 
       <div className="flex items-center gap-1">
         <button
-          onClick={() => setViewMode('design')}
+          onClick={openTeams}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[13px] font-semibold text-white transition-apple active:scale-95 bg-appleBlue hover:opacity-90 shadow-sm"
           title="Manage Teams"
         >
@@ -83,12 +95,16 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview }) => {
         </HeaderIcon>
 
         <HeaderIcon
-          onClick={() => setSettingsOpen(true)}
+          onClick={openSettings}
           title="Settings & API"
           dot={hasKey}
           dotColor="bg-appleGreen"
         >
           <Settings size={16} className={hasKey ? 'text-appleGreen' : ''} />
+        </HeaderIcon>
+
+        <HeaderIcon onClick={openInExternalBrowser} title="Open in browser" className="hidden sm:flex">
+          <ExternalLink size={16} />
         </HeaderIcon>
 
         <HeaderIcon onClick={handleFullscreen} title="Fullscreen" className="hidden sm:flex">

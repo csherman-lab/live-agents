@@ -91,7 +91,7 @@ const Modal: React.FC<ModalProps> = ({
 
   return createPortal(
     <div
-      className="modal-overlay fixed inset-0 z-[650] flex items-center justify-center p-4 sm:p-8"
+      className="modal-overlay fixed inset-0 z-[650]"
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? titleId : undefined}
@@ -99,15 +99,17 @@ const Modal: React.FC<ModalProps> = ({
     >
       <button
         type="button"
-        className="absolute inset-0 bg-black/30 backdrop-blur-md border-0 p-0 cursor-default"
+        className="absolute inset-0 z-0 bg-black/30 backdrop-blur-md border-0 p-0 cursor-default"
         onClick={onClose}
         aria-label="Close dialog"
         tabIndex={-1}
       />
+      <div className="absolute inset-0 z-10 flex items-center justify-center p-4 sm:p-8 pointer-events-none">
       <div
         ref={panelRef}
-        className={`modal-panel relative z-10 pointer-events-auto w-full ${widthClass} max-h-[min(90vh,820px)] flex flex-col glass-panel-elevated rounded-[var(--apple-radius-lg)] shadow-2xl animate-modal-in`}
+        className={`modal-panel pointer-events-auto w-full ${widthClass} max-h-[min(90vh,820px)] flex flex-col glass-panel-elevated rounded-[var(--apple-radius-lg)] shadow-2xl animate-modal-in`}
         onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {(title || subtitle) && (
           <div className="shrink-0 flex items-start gap-4 px-6 pt-6 pb-4 border-b" style={{ borderColor: 'var(--apple-border)' }}>
@@ -137,9 +139,10 @@ const Modal: React.FC<ModalProps> = ({
             </button>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-6 py-5">
+        <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 px-6 py-5 modal-scroll-body">
           {children}
         </div>
+      </div>
       </div>
     </div>,
     document.body,

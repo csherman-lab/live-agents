@@ -72,6 +72,43 @@ export async function exportProjectDeliverables(): Promise<void> {
   downloadBlob(new Blob([report], { type: 'text/html' }), `live-agents-${slug}-${stamp}-report.html`);
 }
 
+/** Export a single JSON bundle with brief, tasks, logs, and deliverable metadata. */
+export async function exportProjectBundle(): Promise<void> {
+  const core = useCoreStore.getState();
+  const teamState = useTeamStore.getState();
+  const team = getAgentSet(teamState.selectedAgentSetId, teamState.customSystems);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const slug = team.teamName.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+
+  const bundle = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    app: 'live-agents',
+    team: {
+      id: teamState.selectedAgentSetId,
+      name: team.teamName,
+      type: team.teamType,
+      outputType: team.outputType,
+    },
+    brief: core.userBrief,
+    phase: core.phase,
+    finalOutput: core.finalOutput,
+    finalAssetType: core.finalAssetType,
+    finalAssetContent: core.finalAssetContent,
+    tasks: core.tasks,
+    actionLog: core.actionLog,
+    agentHistories: core.agentHistories,
+    agentSummaries: core.agentSummaries,
+    tokenUsage: core.totalTokenUsage,
+    estimatedCostUsd: core.totalEstimatedCost,
+  };
+
+  downloadBlob(
+    new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }),
+    `live-agents-${slug}-${stamp}-bundle.json`,
+  );
+}
+
 function buildHtmlReport(
   manifest: Record<string, unknown>,
   assetType: string,

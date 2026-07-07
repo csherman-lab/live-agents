@@ -10,6 +10,7 @@ import { useSceneManager } from '../../simulation/SceneContext';
 import { getBrightness, getDarkenedColor } from './colorUtils';
 import { ColorPicker } from './ColorPicker';
 import { InfoBubble } from '../components/InfoBubble';
+import CustomSelect from '../components/CustomSelect';
 import { TeamOutputBadge } from '../components/TeamOutputBadge';
 
 interface TeamCardProps {
@@ -161,7 +162,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
         <div className="mb-3">
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-100">
             <div className="flex items-center gap-2">
-              <h3 className="text-[9px] font-black uppercase tracking-[0.1em] text-darkDelegation">Edit Team</h3>
+              <h3 className="text-[9px] font-black uppercase tracking-[0.1em] text-ink">Edit Team</h3>
             </div>
             <button onClick={handleCloseEdit} className="p-1 hover:bg-zinc-200 rounded-lg text-zinc-400">
               <X size={14} strokeWidth={3} />
@@ -186,7 +187,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
       {isSelected && !isEditing && (
         <button
           onClick={(e) => { e.stopPropagation(); onModeChange('edit'); }}
-          className="absolute top-3.5 right-3.5 flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-xl text-darkDelegation text-[9px] font-black uppercase tracking-widest transition-all opacity-0 group-hover:opacity-100 z-10"
+          className="absolute top-3.5 right-3.5 flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-xl text-ink text-[9px] font-black uppercase tracking-widest transition-all opacity-0 group-hover:opacity-100 z-10"
         >
           <Edit2 size={12} strokeWidth={2.5} />
           Edit Team
@@ -223,7 +224,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
               </div>
             ) : (
               <div className="space-y-0.5">
-                <h4 className={`text-[11px] font-black leading-tight uppercase tracking-wider truncate mb-0.5 ${system.teamName ? 'text-darkDelegation' : 'text-zinc-300'}`}>{system.teamName || 'Untitled Team'}</h4>
+                <h4 className={`text-[11px] font-black leading-tight uppercase tracking-wider truncate mb-0.5 ${system.teamName ? 'text-ink' : 'text-zinc-300'}`}>{system.teamName || 'Untitled Team'}</h4>
                 <p className={`text-[9px] font-bold uppercase tracking-[0.1em] ${system.teamType ? 'text-zinc-400' : 'text-zinc-200'}`}>{system.teamType || 'Unspecified Type'}</p>
               </div>
             )}
@@ -268,35 +269,38 @@ export const TeamCard: React.FC<TeamCardProps> = ({
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <label className="text-[7px] font-black uppercase text-zinc-400 ml-1">Output Type</label>
-                  <select
+                  <CustomSelect
                     value={localEditData.outputType || 'text'}
-                    onChange={(e) => {
-                      const newType = e.target.value as keyof typeof DEFAULT_MODELS;
-                      setLocalEditData(prev => ({
+                    onChange={(newType) => {
+                      setLocalEditData((prev) => ({
                         ...prev,
-                        outputType: newType,
-                        outputModel: getDefaultModels(providerId)[newType] || providerModels[newType][0] || prev.outputModel,
-                        outputAutoApprove: newType === 'text'
+                        outputType: newType as keyof typeof DEFAULT_MODELS,
+                        outputModel:
+                          getDefaultModels(providerId)[newType as keyof typeof DEFAULT_MODELS] ||
+                          providerModels[newType as keyof typeof providerModels][0] ||
+                          prev.outputModel,
+                        outputAutoApprove: newType === 'text',
                       }));
                     }}
-                    className="w-full theme-input text-[11px] font-bold rounded-xl px-2.5 py-1.5 outline-none cursor-pointer"
-                  >
-                    {supportedOutputTypes.map((type) => (
-                      <option key={type} value={type}>{type.toUpperCase()}</option>
-                    ))}
-                  </select>
+                    options={supportedOutputTypes.map((type) => ({
+                      value: type,
+                      label: type.toUpperCase(),
+                    }))}
+                    className="rounded-xl px-2.5 py-1.5 text-[11px] font-bold"
+                    aria-label="Output Type"
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[7px] font-black uppercase text-zinc-400 ml-1">Output Model</label>
-                  <select
+                  <CustomSelect
                     value={localEditData.outputModel || getDefaultModels(providerId).text}
-                    onChange={(e) => setLocalEditData(prev => ({ ...prev, outputModel: e.target.value }))}
-                    className="w-full theme-input text-[10px] font-bold rounded-xl px-2.5 py-1.5 outline-none cursor-pointer lowercase"
-                  >
-                    {(providerModels[localEditData.outputType as keyof typeof providerModels] || []).map(model => (
-                      <option key={model} value={model}>{model}</option>
-                    ))}
-                  </select>
+                    onChange={(model) => setLocalEditData((prev) => ({ ...prev, outputModel: model }))}
+                    options={(providerModels[localEditData.outputType as keyof typeof providerModels] || []).map(
+                      (model) => ({ value: model, label: model }),
+                    )}
+                    className="rounded-xl px-2.5 py-1.5 text-[10px] font-bold lowercase"
+                    aria-label="Output Model"
+                  />
                 </div>
               </div>
               {supportedOutputTypes.length === 1 && (
@@ -308,7 +312,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
               <div className="flex items-center justify-between p-2.5 theme-chip rounded-xl mt-0.5">
                 <div className="flex flex-col">
                   <div className="flex items-center gap-1">
-                    <span className="text-[8px] font-black uppercase text-darkDelegation tracking-wider">Auto-Approve Output</span>
+                    <span className="text-[8px] font-black uppercase text-ink tracking-wider">Auto-Approve Output</span>
                     <InfoBubble text="When enabled, the team will generate the final asset immediately after finishing all tasks without waiting for your review." />
                   </div>
                   <span className="text-[7px] text-zinc-400 font-bold leading-tight">Generate asset without review</span>
@@ -316,13 +320,13 @@ export const TeamCard: React.FC<TeamCardProps> = ({
                 <button
                   type="button"
                   onClick={() => setLocalEditData(prev => ({ ...prev, outputAutoApprove: !prev.outputAutoApprove }))}
-                  className={`w-8 h-4 rounded-full transition-all relative ${localEditData.outputAutoApprove !== false ? 'bg-darkDelegation shadow-[0_0_8px_rgba(0,0,0,0.15)]' : 'bg-zinc-200'}`}
+                  className={`w-8 h-4 rounded-full transition-all relative ${localEditData.outputAutoApprove !== false ? 'bg-ink shadow-[0_0_8px_rgba(0,0,0,0.15)]' : 'bg-zinc-200'}`}
                 >
                   <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${localEditData.outputAutoApprove !== false ? 'left-[16px]' : 'left-[4px]'}`} />
                 </button>
               </div>
 
-              <button onClick={handleSave} disabled={!isFormValid} className={`w-full py-2.5 mt-1 rounded-xl text-[10px] font-black uppercase tracking-[0.1em] transition-all shadow-lg ${isFormValid ? 'bg-darkDelegation text-white shadow-black/10' : 'bg-zinc-50 text-zinc-300 shadow-none cursor-not-allowed'}`}>Save Changes</button>
+              <button onClick={handleSave} disabled={!isFormValid} className={`w-full py-2.5 mt-1 rounded-xl text-[10px] font-black uppercase tracking-[0.1em] transition-all shadow-lg ${isFormValid ? 'bg-ink text-white shadow-black/10' : 'bg-zinc-50 text-zinc-300 shadow-none cursor-not-allowed'}`}>Save Changes</button>
             </div>
           ) : (
             <div className="space-y-0.5 mb-2.5 px-2">
@@ -342,7 +346,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
                 <div className="px-2 py-0.5 rounded-full text-white text-[7px] font-black uppercase tracking-[0.15em]" style={{ backgroundColor: system.color }}>Active</div>
               )}
               {isSelected && !isActive && !isEditing && (
-                <button onClick={handleSwitch} className="px-3 py-1.5 bg-darkDelegation text-white rounded-full text-[9px] font-black uppercase tracking-wider shadow-md">Switch</button>
+                <button onClick={handleSwitch} className="px-3 py-1.5 bg-ink text-white rounded-full text-[9px] font-black uppercase tracking-wider shadow-md">Switch</button>
               )}
               {isEditing && (
                 <button onClick={handleDelete} className="flex items-center gap-1.5 px-2 py-1 text-red-500 hover:bg-red-50 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all">

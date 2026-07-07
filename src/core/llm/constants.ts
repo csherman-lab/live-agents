@@ -1,6 +1,6 @@
 import type { OutputType } from '../../data/agents';
 
-export type LLMProviderId = 'gemini' | 'openai';
+export type LLMProviderId = 'gemini' | 'openai' | 'anthropic';
 
 export type ModelType = 'text' | 'image' | 'music' | 'video';
 
@@ -69,6 +69,26 @@ export const PROVIDER_CONFIGS: Record<LLMProviderId, ProviderConfig> = {
       video: [],
     },
   },
+  anthropic: {
+    id: 'anthropic',
+    label: 'Anthropic Claude',
+    keyLabel: 'Anthropic API Key',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    keyHelp: 'Text-only agents. Choose a text deliverable team — no image/music/video generation.',
+    capabilities: ['text'],
+    defaultModels: {
+      text: 'claude-sonnet-4-20250514',
+      image: '',
+      music: '',
+      video: '',
+    },
+    availableModels: {
+      text: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022', 'claude-3-5-sonnet-20241022'],
+      image: [],
+      music: [],
+      video: [],
+    },
+  },
 };
 
 export const LLM_PROVIDER_IDS = Object.keys(PROVIDER_CONFIGS) as LLMProviderId[];
@@ -80,7 +100,9 @@ export const DEFAULT_MODELS = PROVIDER_CONFIGS.gemini.defaultModels;
 export const AVAILABLE_MODELS = PROVIDER_CONFIGS.gemini.availableModels;
 
 export function normalizeProviderId(provider?: string): LLMProviderId {
-  return provider === 'openai' ? 'openai' : 'gemini';
+  if (provider === 'openai') return 'openai';
+  if (provider === 'anthropic') return 'anthropic';
+  return 'gemini';
 }
 
 export function getProviderConfig(provider?: string): ProviderConfig {

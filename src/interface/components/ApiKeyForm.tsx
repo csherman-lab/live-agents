@@ -13,7 +13,8 @@ import { toast } from '../../integration/store/toastStore';
 import { APPLE_BLUE } from '../../theme/brand';
 import { testApiKey } from '../../utils/testApiKey';
 
-const STORAGE_KEY = 'byok-config';
+import { saveLlmConfig } from '../../integration/storage/llmConfigStorage';
+import CustomSelect from './CustomSelect';
 
 const ApiKeyForm: React.FC = () => {
   const { llmConfig, setLlmConfig, byokError, apiTestStatus, apiTestError, setApiTestStatus } = useUiStore();
@@ -31,11 +32,7 @@ const ApiKeyForm: React.FC = () => {
 
   const persistConfig = (config: typeof llmConfig) => {
     setLlmConfig(config);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch (e) {
-      console.error('Failed to save API config', e);
-    }
+    saveLlmConfig(config);
   };
 
   const handleProviderChange = (nextProvider: LLMProviderId) => {
@@ -56,7 +53,7 @@ const ApiKeyForm: React.FC = () => {
     const config = {
       provider: providerId,
       apiKey: apiKey.trim(),
-      baseUrl: providerId === 'openai' ? baseUrl.trim() : undefined,
+      baseUrl: providerId === 'openai' || providerId === 'anthropic' ? baseUrl.trim() : undefined,
       model: llmConfig.model || getDefaultModels(providerId).text,
     };
     persistConfig(config);
@@ -69,7 +66,7 @@ const ApiKeyForm: React.FC = () => {
     const emptyConfig = {
       provider: providerId,
       apiKey: '',
-      baseUrl: providerId === 'openai' ? baseUrl.trim() : undefined,
+      baseUrl: providerId === 'openai' || providerId === 'anthropic' ? baseUrl.trim() : undefined,
       model: llmConfig.model || getDefaultModels(providerId).text,
     };
     setApiKey('');
@@ -83,7 +80,7 @@ const ApiKeyForm: React.FC = () => {
     const result = await testApiKey({
       provider: providerId,
       apiKey: key,
-      baseUrl: providerId === 'openai' ? baseUrl.trim() : undefined,
+      baseUrl: providerId === 'openai' || providerId === 'anthropic' ? baseUrl.trim() : undefined,
       model: llmConfig.model || getDefaultModels(providerId).text,
     });
     if (result.ok === false) {
@@ -100,17 +97,15 @@ const ApiKeyForm: React.FC = () => {
         <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--apple-text-secondary)]">
           AI Provider
         </label>
-        <select
+        <CustomSelect
           value={providerId}
-          onChange={(e) => handleProviderChange(e.target.value as LLMProviderId)}
-          className="w-full theme-input rounded-2xl px-4 py-3 text-[13px] font-medium focus:outline-none focus:ring-2 focus:ring-appleBlue/30"
-        >
-          {LLM_PROVIDER_IDS.map((id) => (
-            <option key={id} value={id}>
-              {getProviderConfig(id).label}
-            </option>
-          ))}
-        </select>
+          options={LLM_PROVIDER_IDS.map((id) => ({
+            value: id,
+            label: getProviderConfig(id).label,
+          }))}
+          onChange={(v) => handleProviderChange(v as LLMProviderId)}
+          aria-label="AI Provider"
+        />
         <p className="text-[11px] leading-relaxed text-[var(--apple-text-secondary)]">
           {providerConfig.keyHelp}
         </p>
@@ -120,17 +115,13 @@ const ApiKeyForm: React.FC = () => {
         <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--apple-text-secondary)]">
           Default Agent Model
         </label>
-        <select
+        <CustomSelect
           value={llmConfig.model || getDefaultModels(providerId).text}
-          onChange={(e) => persistConfig({ model: e.target.value })}
-          className="w-full theme-input rounded-2xl px-4 py-3 text-[13px] font-medium lowercase focus:outline-none focus:ring-2 focus:ring-appleBlue/30"
-        >
-          {textModels.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
+          options={textModels.map((model) => ({ value: model, label: model }))}
+          onChange={(model) => persistConfig({ model })}
+          className="lowercase"
+          aria-label="Default Agent Model"
+        />
       </div>
 
       {hasKey && apiTestStatus !== 'error' && (
@@ -169,7 +160,7 @@ const ApiKeyForm: React.FC = () => {
         </button>
       </div>
 
-      {providerId === 'openai' && (
+      {(providerId === 'openai' || providerId === 'anthropic') && (
         <div className="space-y-1.5">
           <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--apple-text-secondary)]">
             API Base URL (optional)
@@ -178,7 +169,7 @@ const ApiKeyForm: React.FC = () => {
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.openai.com/v1"
+            placeholder={providerId === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'}
             className="w-full theme-input rounded-2xl px-4 py-3 text-[13px] font-mono placeholder:text-zinc-400 placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-appleBlue/30"
           />
           <p className="text-[11px] text-[var(--apple-text-secondary)]">

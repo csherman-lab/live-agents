@@ -169,7 +169,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ compact, onReplayOnboardi
       <div className="flex items-start gap-2 px-2 py-1">
         <Shield size={14} className="text-zinc-400 mt-0.5 shrink-0" />
         <p className="text-[11px] leading-relaxed" style={{ color: APPLE_TEXT_SECONDARY }}>
-          Your API key never leaves your browser. All AI requests go directly from your device to Google.
+          Your API key never leaves your browser. AI requests go directly from your device to your chosen provider (Gemini, OpenAI, or Anthropic).
         </p>
       </div>
     </div>

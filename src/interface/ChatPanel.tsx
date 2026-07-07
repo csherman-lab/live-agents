@@ -7,6 +7,7 @@ import { USER_COLOR, USER_COLOR_LIGHT, USER_COLOR_SOFT } from '../theme/brand';
 import { useCoreStore } from '../integration/store/coreStore';
 import { useTeamStore, useActiveTeam } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
+import { sendOverviewChatMessage } from '../integration/overviewChatService';
 import { useSceneManager } from '../simulation/SceneContext';
 import { Avatar } from './components/Avatar';
 import { AuditModal } from './AuditModal';
@@ -94,7 +95,11 @@ const ChatPanel: React.FC = () => {
 
     const text = input;
     setInput('');
-    await scene?.sendMessage(text);
+    if (scene) {
+      await scene.sendMessage(text);
+    } else {
+      await sendOverviewChatMessage(text);
+    }
   };
 
   if (!isChatting || !agent) {
@@ -174,7 +179,7 @@ const ChatPanel: React.FC = () => {
                   style={msg.role === 'user' ? {
                     backgroundColor: USER_COLOR_LIGHT,
                     borderColor: USER_COLOR_SOFT,
-                    color: '#27272a' // text-darkDelegation
+                    color: '#27272a' // text-ink
                   } : {
                     backgroundColor: 'var(--apple-surface)',
                     borderColor: 'var(--apple-border)',
@@ -213,7 +218,7 @@ const ChatPanel: React.FC = () => {
                           {coreStore.tasks.find(t => t.id === msg.metadata.reviewTaskId)?.status === 'on_hold' && (
                             <button
                               onClick={() => setActiveAuditTaskId(msg.metadata.reviewTaskId)}
-                              className="flex-1 min-w-[120px] px-4 py-2 bg-darkDelegation text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-black active:scale-95 transition-all shadow-sm whitespace-nowrap"
+                              className="flex-1 min-w-[120px] px-4 py-2 bg-ink text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-black active:scale-95 transition-all shadow-sm whitespace-nowrap"
                             >
                               Review Task
                             </button>

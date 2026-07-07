@@ -117,7 +117,7 @@ export const AuditModal: React.FC<AuditModalProps> = ({ taskId, isOpen, onClose,
                   {selectedRevisionIndex !== null && (
                     <button
                       onClick={() => setSelectedRevisionIndex(null)}
-                      className="text-[9px] font-black uppercase text-zinc-400 hover:text-darkDelegation transition-colors"
+                      className="text-[9px] font-black uppercase text-zinc-400 hover:text-ink transition-colors"
                     >
                       Back to latest
                     </button>
@@ -202,7 +202,7 @@ export const AuditModal: React.FC<AuditModalProps> = ({ taskId, isOpen, onClose,
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
               placeholder="Describe what needs to be changed before rejecting..."
-              className="w-full theme-input rounded-xl p-3 text-[13px] focus:outline-none focus:ring-2 focus:ring-darkDelegation/5 transition-all resize-none h-20 placeholder:text-zinc-300 placeholder:italic"
+              className="w-full theme-input rounded-xl p-3 text-[13px] focus:outline-none focus:ring-2 focus:ring-ink/5 transition-all resize-none h-20 placeholder:text-zinc-300 placeholder:italic"
             />
           </div>
         )}

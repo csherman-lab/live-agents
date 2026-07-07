@@ -100,7 +100,7 @@ export function FinalOutputModal() {
             </audio>
             <button
               onClick={handleDownload}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-darkDelegation text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all active:scale-95 shrink-0"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-ink text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all active:scale-95 shrink-0"
             >
               <Download size={14} strokeWidth={2.5} />
               Download Audio
@@ -155,7 +155,7 @@ export function FinalOutputModal() {
             <div>
               <h2 className="text-sm font-black uppercase tracking-widest text-[var(--apple-text)] flex items-center gap-2">
                 {finalAssetType !== 'text' && (
-                  <span className="px-2 py-0.5 bg-darkDelegation text-white text-[8px] rounded-md tracking-tighter">
+                  <span className="px-2 py-0.5 bg-ink text-white text-[8px] rounded-md tracking-tighter">
                     {(activeTeam?.outputType || finalAssetType).toUpperCase()}
                   </span>
                 )}
@@ -212,7 +212,7 @@ export function FinalOutputModal() {
               </button>
               <button
                 onClick={handleCopy}
-                className="px-6 py-3 bg-darkDelegation text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.15em] hover:bg-black active:scale-[0.98] transition-all shadow-lg shadow-black/10"
+                className="px-6 py-3 bg-ink text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.15em] hover:bg-black active:scale-[0.98] transition-all shadow-lg shadow-black/10"
               >
                 {copied ? 'Copied!' : `Copy ${finalAssetType === 'text' ? 'Output' : 'Prompt'}`}
               </button>

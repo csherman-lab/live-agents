@@ -20,6 +20,7 @@ import {
 import { getAvailableModels, normalizeProviderId } from '../core/llm/constants'
 import { useUiStore } from '../integration/store/uiStore'
 import { InfoBubble } from './components/InfoBubble'
+import CustomSelect from './components/CustomSelect'
 
 export function OutputReviewModal() {
   const {
@@ -79,33 +80,37 @@ export function OutputReviewModal() {
           <Maximize size={12} /> Aspect Ratio
           <InfoBubble text="The horizontal or vertical proportions of the generated asset." />
         </label>
-        <select
+        <CustomSelect
           value={params.aspectRatio || '16:9'}
-          onChange={(e) => updateParam('aspectRatio', e.target.value)}
-          className="w-full theme-input rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-darkDelegation outline-none"
-        >
-          <option value="1:1">1:1 Square</option>
-          <option value="16:9">16:9 Cinematic</option>
-          <option value="9:16">9:16 Vertical</option>
-          <option value="4:3">4:3 Classic</option>
-          <option value="3:2">3:2 Professional</option>
-        </select>
+          onChange={(v) => updateParam('aspectRatio', v)}
+          options={[
+            { value: '1:1', label: '1:1 Square' },
+            { value: '16:9', label: '16:9 Cinematic' },
+            { value: '9:16', label: '9:16 Vertical' },
+            { value: '4:3', label: '4:3 Classic' },
+            { value: '3:2', label: '3:2 Professional' },
+          ]}
+          className="rounded-xl px-3 py-2 text-xs"
+          aria-label="Aspect Ratio"
+        />
       </div>
       <div className="space-y-2">
         <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 flex items-center gap-1.5">
           <Settings2 size={12} /> Image Size
           <InfoBubble text="Target dimensions for the final image. Higher sizes offer more detail but may take longer." />
         </label>
-        <select
+        <CustomSelect
           value={params.imageSize || '1K'}
-          onChange={(e) => updateParam('imageSize', e.target.value)}
-          className="w-full theme-input rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-darkDelegation outline-none"
-        >
-          <option value="512">512px (Fast)</option>
-          <option value="1K">1K (Standard)</option>
-          <option value="2K">2K (High Res)</option>
-          <option value="4K">4K (Ultra)</option>
-        </select>
+          onChange={(v) => updateParam('imageSize', v)}
+          options={[
+            { value: '512', label: '512px (Fast)' },
+            { value: '1K', label: '1K (Standard)' },
+            { value: '2K', label: '2K (High Res)' },
+            { value: '4K', label: '4K (Ultra)' },
+          ]}
+          className="rounded-xl px-3 py-2 text-xs"
+          aria-label="Image Size"
+        />
       </div>
     </div>
   )
@@ -118,30 +123,34 @@ export function OutputReviewModal() {
             <Monitor size={12} /> Resolution
             <InfoBubble text="Video output quality. Higher resolutions increase visual fidelity and processing requirements." />
           </label>
-          <select
+          <CustomSelect
             value={params.resolution || '720p'}
-            onChange={(e) => updateParam('resolution', e.target.value)}
-            className="w-full theme-input rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-darkDelegation outline-none"
-          >
-            <option value="720p">720p HD</option>
-            <option value="1080p">1080p Full HD</option>
-            <option value="4k">4K Vision</option>
-          </select>
+            onChange={(v) => updateParam('resolution', v)}
+            options={[
+              { value: '720p', label: '720p HD' },
+              { value: '1080p', label: '1080p Full HD' },
+              { value: '4k', label: '4K Vision' },
+            ]}
+            className="rounded-xl px-3 py-2 text-xs"
+            aria-label="Resolution"
+          />
         </div>
         <div className="space-y-2">
           <label className="text-[10px] font-black uppercase tracking-widest text-zinc-400 flex items-center gap-1.5">
             <Clock size={12} /> Duration
             <InfoBubble text="Total runtime of the generated video clip." />
           </label>
-          <select
-            value={params.durationSeconds || 4}
-            onChange={(e) => updateParam('durationSeconds', parseInt(e.target.value))}
-            className="w-full theme-input rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-darkDelegation outline-none"
-          >
-            <option value="4">4 Seconds</option>
-            <option value="6">6 Seconds</option>
-            <option value="8">8 Seconds</option>
-          </select>
+          <CustomSelect
+            value={String(params.durationSeconds || 4)}
+            onChange={(v) => updateParam('durationSeconds', parseInt(v, 10))}
+            options={[
+              { value: '4', label: '4 Seconds' },
+              { value: '6', label: '6 Seconds' },
+              { value: '8', label: '8 Seconds' },
+            ]}
+            className="rounded-xl px-3 py-2 text-xs"
+            aria-label="Duration"
+          />
         </div>
       </div>
     </div>
@@ -157,15 +166,13 @@ export function OutputReviewModal() {
           <Sparkles size={12} /> Generation Model
           <InfoBubble text="Select the specific Gemini model used for the final generation. Flash models are faster, Pro models are more capable." />
         </label>
-        <select
+        <CustomSelect
           value={params.model || activeTeam.outputModel}
-          onChange={(e) => updateParam('model', e.target.value)}
-          className="w-full theme-input rounded-xl px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-darkDelegation outline-none"
-        >
-          {models.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
+          onChange={(v) => updateParam('model', v)}
+          options={models.map((m) => ({ value: m, label: m }))}
+          className="rounded-xl px-3 py-2 text-xs font-medium"
+          aria-label="Generation Model"
+        />
       </div>
     )
   }
@@ -178,13 +185,18 @@ export function OutputReviewModal() {
   }[activeTeam.outputType] || Sparkles
 
   return (
-    <div
-      className="fixed inset-0 z-[650] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
-      onClick={handleCancelAndReset}
-    >
+    <div className="fixed inset-0 z-[650]">
+      <button
+        type="button"
+        className="absolute inset-0 z-0 bg-black/30 backdrop-blur-md border-0 p-0 cursor-default"
+        onClick={handleCancelAndReset}
+        aria-label="Close dialog"
+      />
+      <div className="absolute inset-0 z-10 flex items-center justify-center p-4 pointer-events-none">
       <div
-        className="glass-panel-elevated rounded-[var(--apple-radius-lg)] w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-modal-in"
+        className="glass-panel-elevated rounded-[var(--apple-radius-lg)] w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-modal-in pointer-events-auto"
         onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-8 py-6 border-b theme-panel" style={{ borderColor: 'var(--apple-border)' }}>
@@ -224,7 +236,7 @@ export function OutputReviewModal() {
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              className="w-full h-40 theme-input rounded-2xl p-4 text-sm text-[var(--apple-text)] leading-relaxed font-sans focus:ring-2 focus:ring-darkDelegation outline-none resize-none shadow-sm"
+              className="w-full h-40 theme-input rounded-2xl p-4 text-sm text-[var(--apple-text)] leading-relaxed font-sans focus:ring-2 focus:ring-ink outline-none resize-none shadow-sm"
               placeholder="Enter the final generation prompt..."
             />
           </div>
@@ -290,11 +302,12 @@ export function OutputReviewModal() {
           </button>
         </div>
       </div>
+      </div>
 
       {/* Confirmation Modal Overlay */}
       {isConfirmingReset && (
         <div
-          className="fixed inset-0 z-[660] flex items-center justify-center bg-darkDelegation/40 backdrop-blur-md p-4 cursor-default"
+          className="fixed inset-0 z-[660] flex items-center justify-center bg-ink/40 backdrop-blur-md p-4 cursor-default"
           onClick={(e) => {
             e.stopPropagation()
             setIsConfirmingReset(false)

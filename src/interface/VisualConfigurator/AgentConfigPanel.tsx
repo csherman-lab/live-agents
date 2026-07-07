@@ -7,6 +7,7 @@ import { useTeamStore } from '../../integration/store/teamStore';
 import { Avatar } from '../components/Avatar';
 import { ColorPicker } from './ColorPicker';
 import { InfoBubble } from '../components/InfoBubble';
+import CustomSelect from '../components/CustomSelect';
 import { getBrightness, MAX_BRIGHTNESS } from './colorUtils';
 
 interface AgentConfigPanelProps {
@@ -140,7 +141,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
               <Avatar type="user" color={USER_COLOR} size={64} />
             </div>
             <div>
-              <h4 className="text-sm font-black text-darkDelegation uppercase tracking-widest mb-1">Primary User</h4>
+              <h4 className="text-sm font-black text-ink uppercase tracking-widest mb-1">Primary User</h4>
               <p className="text-[11px] text-zinc-500 font-medium leading-relaxed">This is you. Your identity and role are fixed across all teams for consistency.</p>
             </div>
           </div>
@@ -162,7 +163,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
               )}
 
               {renderField('Name', <CircleUser size={12} />, isView ? (
-                <p className="text-sm font-bold text-darkDelegation">{editData.name}</p>
+                <p className="text-sm font-bold text-ink">{editData.name}</p>
               ) : (
                 <div className="space-y-1">
                   <input
@@ -185,13 +186,13 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
                   {editData.model || 'gemini-3-flash-preview'}
                 </div>
               ) : (
-                <select
+                <CustomSelect
                   value={editData.model || 'gemini-3-flash-preview'}
-                  onChange={(e) => updateDraft({ model: e.target.value })}
-                  className="w-full px-3 py-2 theme-input rounded-xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black/5 cursor-pointer lowercase"
-                >
-                  {availableModels.map(m => <option key={m} value={m} className="lowercase">{m}</option>)}
-                </select>
+                  onChange={(model) => updateDraft({ model })}
+                  options={availableModels.map((m) => ({ value: m, label: m }))}
+                  className="rounded-xl px-3 py-2 text-xs font-mono lowercase"
+                  aria-label="LLM Model"
+                />
               ), 'The specific Gemini model this agent will use.')}
             </div>
 
@@ -307,7 +308,7 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({
           <button
             onClick={handleSave}
             disabled={!isValid}
-            className={`w-full py-3 bg-darkDelegation hover:bg-black text-white rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-black/5 active:scale-95 ${!isValid ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`w-full py-3 bg-ink hover:bg-black text-white rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg shadow-black/5 active:scale-95 ${!isValid ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <Save size={16} strokeWidth={2.5} />
             Update Agent

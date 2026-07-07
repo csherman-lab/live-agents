@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { getAllAgents } from '../../data/agents';
 import { AgentState, CharacterState } from '../../types';
 import { useTeamStore, getActiveAgentSet } from './teamStore';
-import { DEFAULT_MODELS, getDefaultModels, getTextModels, normalizeProviderId } from '../../core/llm/constants';
+import { getDefaultModels, getTextModels, normalizeProviderId } from '../../core/llm/constants';
+import { loadLlmConfig } from '../storage/llmConfigStorage';
 import { useCoreStore } from './coreStore';
 import { loadThemePreference, saveThemePreference, type ThemePreference } from '../../theme/theme';
 
@@ -59,26 +60,7 @@ export const useUiStore = create<CharacterState>()(
     activeAuditTaskId: null,
     setActiveAuditTaskId: (taskId: string | null) => set({ activeAuditTaskId: taskId }),
 
-    llmConfig: (() => {
-      try {
-        const saved = localStorage.getItem('byok-config');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const provider = normalizeProviderId(parsed.provider);
-          return {
-            provider,
-            apiKey: parsed.apiKey || '',
-            baseUrl: parsed.baseUrl || '',
-            model: parsed.model || getDefaultModels(provider).text,
-          };
-        }
-      } catch { }
-      return {
-        provider: 'gemini',
-        apiKey: '',
-        model: DEFAULT_MODELS.text,
-      };
-    })(),
+    llmConfig: loadLlmConfig(),
 
     setThinking: (isThinking: boolean) => set({ isThinking }),
     setIsTyping: (isTyping: boolean) => set({ isTyping }),

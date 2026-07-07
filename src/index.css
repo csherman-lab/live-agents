@@ -184,7 +184,7 @@ body,
   background-color: rgba(44, 44, 46, 0.95);
 }
 
-[data-theme="dark"] .text-darkDelegation {
+[data-theme="dark"] .text-ink {
   color: var(--apple-text);
 }
 
@@ -361,7 +361,7 @@ a {
 }
 
 @theme {
-  --color-darkDelegation: #1D1D1F;
+  --color-ink: #1D1D1F;
   --color-appleBlue: #007AFF;
   --color-appleGreen: #34C759;
   --color-appleGray: #8E8E93;
@@ -488,6 +488,15 @@ a {
 
 .modal-overlay {
   z-index: 650;
+}
+
+.modal-scroll-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.touch-manipulation {
+  touch-action: manipulation;
 }
 
 @keyframes shimmer {

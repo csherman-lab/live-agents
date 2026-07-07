@@ -172,6 +172,20 @@ const App: React.FC = () => {
       });
   }, []);
 
+  const retrySceneInit = useCallback(() => {
+    initGenerationRef.current += 1;
+    if (managerRef.current) {
+      managerRef.current.dispose();
+      managerRef.current = null;
+    }
+    setSceneManager(null);
+    setSceneReady(false);
+    setSceneError(false);
+    initPromiseRef.current = null;
+    const node = canvasRef.current;
+    if (node) attachCanvas(node);
+  }, [attachCanvas]);
+
   const handleGoLive = () => {
     enterWorkspace();
   };
@@ -191,11 +205,11 @@ const App: React.FC = () => {
   return (
     <SceneContext.Provider value={sceneManager}>
       <div className="w-screen h-screen overflow-hidden flex flex-col app-shell">
-        {!isFullscreen && <Header onBackToOverview={isSimulation ? handleBackToOverview : undefined} />}
+        {!isFullscreen && <Header onBackToOverview={isSimulation ? handleBackToOverview : undefined} onDismissOnboarding={() => setShowOnboarding(false)} />}
 
         <div className="flex-1 flex flex-row min-h-0 min-w-0 overflow-hidden">
           {isOverview && !isFullscreen && (
-            <div className="w-[min(400px,38vw)] shrink-0 border-r panel-sidebar flex flex-col min-h-0 h-full">
+            <div className="w-[min(400px,38vw)] shrink-0 border-r panel-sidebar flex flex-col min-h-0 h-full relative z-40">
               <OverviewPanel
                 onGoLive={handleGoLive}
                 onManageTeams={() => setViewMode('design')}
@@ -236,7 +250,7 @@ const App: React.FC = () => {
                     <div className="flex-1 preview-frame relative min-h-0">
                       <div ref={attachCanvas} className="absolute inset-0" style={{ background: 'var(--apple-bg)' }}>
                         {sceneError ? (
-                          <WebGPUFallbackOverlay compact />
+                          <WebGPUFallbackOverlay compact onRetry={retrySceneInit} />
                         ) : (
                           <SceneLoadingOverlay visible={!(sceneReady && sceneManager)} compact />
                         )}
@@ -255,6 +269,7 @@ const App: React.FC = () => {
                     setIsFullscreen={setIsFullscreen}
                     sceneReady={sceneReady && !!sceneManager}
                     sceneError={sceneError}
+                    onRetryScene={retrySceneInit}
                   />
                 </Suspense>
               )}
