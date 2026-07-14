@@ -1,9 +1,16 @@
 import * as THREE from 'three/webgpu';
-import { AgentNode, USER_ID, MAX_AGENTS } from '../../data/agents';
+import { AgentNode, MAX_AGENTS } from '../../data/agents';
 import { useCoreStore } from '../../integration/store/coreStore';
-import { IAgentDriver } from '../../types';
+import { CharacterStateKey, IAgentDriver } from '../../types';
 import { CharacterController } from '../CharacterController';
+import {
+  AGENT_SEPARATION_RADIUS,
+  AGENT_SEPARATION_WANDER_CLEARANCE,
+} from '../constants';
 
+/** Desk / idle micro-beat interval range (seconds). */
+const DESK_LIFE_MIN = 4;
+const DESK_LIFE_RANGE = 8; // → 4–12s
 
 /**
  * NpcAgentDriver — drives a single NPC autonomously.
@@ -12,10 +19,13 @@ import { CharacterController } from '../CharacterController';
  * The update() method is the entry point for all NPC autonomous behavior.
  *
  * It respects the global Core phase and individual task status to determine behavior.
+ * Wave 14: seated / waiting agents get light desk life (sit_work ↔ sit_idle,
+ * occasional look_around when standing) without fighting walk / chat / GOTO.
  */
 export class NpcAgentDriver implements IAgentDriver {
   public readonly agentIndex: number;
-  private behaviorTimer: number = Math.random() * 5 + 2; // Initial wait before moving
+  /** Countdown to next autonomous / desk-life decision. Staggered per agent. */
+  private behaviorTimer: number;
   private wasBusy: boolean = false;
 
   /**
@@ -30,6 +40,8 @@ export class NpcAgentDriver implements IAgentDriver {
     protected readonly data: AgentNode,
   ) {
     this.agentIndex = agentIndex;
+    // Stagger first beat so the team doesn't flip in lockstep (4–12s).
+    this.behaviorTimer = DESK_LIFE_MIN + ((agentIndex * 2.37) % DESK_LIFE_RANGE);
   }
 
   /** Sets whether the agent is currently engaged in a chat, suspending autonomy. */
@@ -43,8 +55,19 @@ export class NpcAgentDriver implements IAgentDriver {
     const currentState = this.controller.getState(this.agentIndex);
     const systemState = useCoreStore.getState();
 
-    // If we are currently chatting with this NPC, suspend autonomous behavior
+    // Chat owns body language — suspend autonomy entirely.
     if (this.isChattingWithMe) {
+      return;
+    }
+
+    // Never interrupt locomotion, chat poses, or an active nav path.
+    if (
+      currentState === 'walk' ||
+      currentState === 'talk' ||
+      currentState === 'listen' ||
+      currentState === 'sit_down' ||
+      this.controller.isPathing(this.agentIndex)
+    ) {
       return;
     }
 
@@ -67,26 +90,55 @@ export class NpcAgentDriver implements IAgentDriver {
     }
     this.wasBusy = isBusyWithSystem;
 
-    // 1. SYSTEM HIERARCHY: If the agent is busy with a system task, the driver stays PASSIVE.
-    // The SceneManager is responsible for the intentional movement to work/boardrooms.
-    if (activeTask) {
-      // Suspend ALL autonomous deciding while busy with the store-driven tasks.
-      // We only allow flavor updates if we are not walking (set by SceneManager)
-      if (currentState !== 'walk' && currentState !== 'sit_idle' && currentState !== 'sit_work') {
-        // You could optionally put some idle-standing animations here, but basically
-        // we want to stay where the SceneManager put us.
+    const isSeated = currentState === 'sit_idle' || currentState === 'sit_work';
+    const isStandingRest = currentState === 'idle' || currentState === 'look_around';
+
+    // Busy agents: SceneManager owns placement. Only flavor seated desk life.
+    if (isBusyWithSystem) {
+      if (!isSeated) return;
+      this.behaviorTimer -= delta;
+      if (this.behaviorTimer <= 0) {
+        this._tickDeskLife(currentState);
       }
       return;
     }
 
-    // 2. AUTONOMOUS BEHAVIOR: Only decide new actions if we are currently resting in a stable state
-    if (currentState === 'idle' || currentState === 'sit_idle' || currentState === 'look_around') {
-      this.behaviorTimer -= delta;
+    // Autonomous: only decide from stable rest states (incl. sit_work).
+    if (!isSeated && !isStandingRest) return;
 
-      if (this.behaviorTimer <= 0) {
-        this._decideNextAction(positions, currentState);
+    this.behaviorTimer -= delta;
+    if (this.behaviorTimer <= 0) {
+      this._decideNextAction(positions, currentState);
+    }
+  }
+
+  private _resetDeskTimer(): void {
+    this.behaviorTimer = DESK_LIFE_MIN + Math.random() * DESK_LIFE_RANGE;
+  }
+
+  /**
+   * Light desk life: sit_work ↔ sit_idle. Never stands / wanders.
+   * Subtle focused mouth while working (ExpressionBuffer already has 'neutral').
+   */
+  private _tickDeskLife(currentState: CharacterStateKey | string): void {
+    if (currentState === 'sit_work') {
+      // Mostly pause typing to rest; sometimes keep working.
+      if (Math.random() < 0.6) {
+        this.controller.play(this.agentIndex, 'sit_idle');
+      } else {
+        this.controller.play(this.agentIndex, 'sit_work');
+        this.controller.setExpression(this.agentIndex, 'neutral');
+      }
+    } else {
+      // sit_idle → lean into work most of the time
+      if (Math.random() < 0.7) {
+        this.controller.play(this.agentIndex, 'sit_work');
+        this.controller.setExpression(this.agentIndex, 'neutral');
+      } else {
+        this.controller.play(this.agentIndex, 'sit_idle');
       }
     }
+    this._resetDeskTimer();
   }
 
   private _updateProjectReadyBehavior(positions: Float32Array, delta: number, currentState: string): void {
@@ -123,23 +175,18 @@ export class NpcAgentDriver implements IAgentDriver {
     }
   }
 
-  private _decideNextAction(positions: Float32Array, currentState: string): void {
+  private _decideNextAction(positions: Float32Array, currentState: CharacterStateKey | string): void {
     const rand = Math.random();
-    const isSeated = currentState === 'sit_idle';
+    const isSeated = currentState === 'sit_idle' || currentState === 'sit_work';
 
-    // 1. Behavior when SEATED
+    // 1. Behavior when SEATED — prefer desk life; rarely stand up
     if (isSeated) {
-      // 10% chance to just stay seated and play an expression
-      if (rand < 0.1) {
-        const expressions: ('sit_idle')[] = ['sit_idle'];
-        const randomAnim = expressions[Math.floor(Math.random() * expressions.length)];
-        this.controller.play(this.agentIndex, randomAnim);
-        this.behaviorTimer = Math.random() * 15 + 15;
+      // ~70%: stay seated and swap sit_work ↔ sit_idle
+      if (rand < 0.7) {
+        this._tickDeskLife(currentState);
         return;
       }
-
-      // 90% chance to stand up: fall through to movement logic below,
-      // but only to move/wander, not to sit again immediately.
+      // ~30%: stand up and fall through to movement logic
     }
 
     // Capture current position
@@ -151,31 +198,39 @@ export class NpcAgentDriver implements IAgentDriver {
 
     // 2. Behavior when STANDING (or if decided to get up)
 
-    // A. Chance to go sit (only if NOT already seated or if we explicitly want a new POI)
+    // Standing rest: occasional look_around before wandering (~35%)
+    if (!isSeated && rand < 0.35) {
+      this.controller.play(this.agentIndex, 'look_around');
+      this._resetDeskTimer();
+      return;
+    }
+
+    // A. Chance to go sit (only if NOT already seated)
     // Lead agent candidates NEVER sit, they prefer to pace or stay standing
     const isLeadCandidate = this.agentIndex === 1;
-    if (!isSeated && rand < 0.4 && !isLeadCandidate) {
+    if (!isSeated && rand < 0.55 && !isLeadCandidate) {
       const pois = this.controller.poiManager.getFreePois('sit_idle', this.agentIndex);
       if (pois.length > 0) {
         const poi = pois[Math.floor(Math.random() * pois.length)];
         this.controller.walkToPoi(this.agentIndex, poi.id, undefined, currentPos);
-        this.behaviorTimer = Math.random() * 15 + 15;
+        this.behaviorTimer = Math.random() * 8 + 8; // longer sit stay before next decide
         return;
       }
     }
 
     // B. Chance to wander to common areas (both standing and those getting up)
-    if (rand < 0.7) {
+    if (rand < 0.75 || isSeated) {
       const areaPois = this.controller.poiManager.getFreePoisByPrefix('area-', this.agentIndex);
       if (areaPois.length > 0) {
         const areaPoi = areaPois[Math.floor(Math.random() * areaPois.length)];
 
-        // Calculate distributed position (0.75m radius, 1 slot per MAX_AGENTS)
+        // Distributed ring slot per agent index, then nudge clear of nearby agents
         const angle = (this.agentIndex * (Math.PI * 2)) / MAX_AGENTS;
         const radius = 1;
         const target = areaPoi.position.clone();
         target.x += Math.cos(angle) * radius;
         target.z += Math.sin(angle) * radius;
+        this._nudgeWanderTargetClear(positions, target);
 
         // Calculate "natural" rotation: facing the center of the area
         const direction = new THREE.Vector3().subVectors(areaPoi.position, target).normalize();
@@ -184,7 +239,7 @@ export class NpcAgentDriver implements IAgentDriver {
 
         if (this.controller.moveTo(this.agentIndex, target, 'look_around', undefined, currentPos, targetQuaternion)) {
           this.controller.poiManager.releaseAll(this.agentIndex);
-          this.behaviorTimer = Math.random() * 5 + 10;
+          this.behaviorTimer = Math.random() * 5 + 8;
           return;
         }
       }
@@ -195,10 +250,33 @@ export class NpcAgentDriver implements IAgentDriver {
       const expressions: ('look_around' | 'wave' | 'happy')[] = ['look_around', 'wave', 'happy'];
       const randomAnim = expressions[Math.floor(Math.random() * expressions.length)];
       this.controller.play(this.agentIndex, randomAnim);
-      this.behaviorTimer = Math.random() * 5 + 5;
+      this._resetDeskTimer();
     } else {
-      // If we were seated and decided to get up (10%) but found no place to go, stay seated.
-      this.behaviorTimer = 5;
+      // Seated get-up failed to find a path — stay seated with desk life next
+      this._tickDeskLife(currentState);
+    }
+  }
+
+  /**
+   * Push a wander target away from other agents already near that spot,
+   * so arrivals don’t intentionally stack inside the separation radius.
+   */
+  private _nudgeWanderTargetClear(positions: Float32Array, target: THREE.Vector3): void {
+    const clearR = AGENT_SEPARATION_RADIUS * AGENT_SEPARATION_WANDER_CLEARANCE;
+    const clearR2 = clearR * clearR;
+    const count = this.controller.getCount();
+
+    for (let i = 0; i < count; i++) {
+      if (i === this.agentIndex) continue;
+      const dx = target.x - positions[i * 4];
+      const dz = target.z - positions[i * 4 + 2];
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= clearR2 || d2 < 1e-8) continue;
+
+      const dist = Math.sqrt(d2);
+      const push = (clearR - dist) / dist;
+      target.x += dx * push;
+      target.z += dz * push;
     }
   }
 

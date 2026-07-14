@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   atan,
   attribute, cos, float, Fn, If, instanceIndex, mat3,
-  mat4, positionLocal, sin, storage, texture, uint, uniform, uv, vec3,
+  mat4, mix, positionLocal, sin, storage, texture, uint, uniform, uv, vec2, vec3,
   vec4
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
@@ -13,7 +13,14 @@ import { getActiveAgentSet } from '../../integration/store/teamStore';
 import { AgentBehavior, AnimationName, ExpressionKey } from '../../types';
 import { AgentStateBuffer } from '../behavior/AgentStateBuffer';
 import { ExpressionBuffer } from '../behavior/ExpressionBuffer';
-import { DRACO_LIB_PATH } from '../constants';
+import {
+  AGENT_MOVE_GOTO_MULT,
+  AGENT_MOVE_SPEED,
+  AGENT_WAYPOINT_RADIUS,
+  ATLAS_COLS,
+  ATLAS_ROWS,
+  DRACO_LIB_PATH,
+} from '../constants';
 import { PoiManager } from '../world/PoiManager';
 
 export class CharacterManager {
@@ -25,6 +32,7 @@ export class CharacterManager {
   private velAttribute: THREE.StorageInstancedBufferAttribute | null = null;
   private colorAttribute: THREE.InstancedBufferAttribute | null = null;
   private accessoryAttribute: THREE.InstancedBufferAttribute | null = null;
+  private scaleAttribute: THREE.InstancedBufferAttribute | null = null;
   private positionStorage: any;
   private velocityStorage: any;
 
@@ -47,6 +55,8 @@ export class CharacterManager {
   // Assets & Objects
   private instancedMeshes: THREE.Mesh[] = [];
   private meshData: { name: string; geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial }[] = [];
+  private eyesAtlasMap: THREE.Texture | null = null;
+  private mouthAtlasMap: THREE.Texture | null = null;
 
   // Animation Data
   private animationsMeta: { [key: string]: { offset: number; numFrames: number; duration: number; index: number } } = {};
@@ -56,7 +66,7 @@ export class CharacterManager {
   private headBoneIndex = -1;
 
   // Uniforms
-  private uSpeed = uniform(0.015);
+  private uSpeed = uniform(AGENT_MOVE_SPEED);
 
   public isLoaded = false;
 
@@ -72,7 +82,23 @@ export class CharacterManager {
     dracoLoader.setDecoderPath(DRACO_LIB_PATH);
     loader.setDRACOLoader(dracoLoader);
     try {
-      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb`);
+      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb?v=187`);
+      // Face atlases: white eye whites + black pupils + thick smile. Cache-bust beats GLB embeds.
+      const texLoader = new THREE.TextureLoader();
+      const loadFaceAtlas = async (file: string) => {
+        const map = await texLoader.loadAsync(
+          `${import.meta.env.BASE_URL}models/textures/${file}?v=187`,
+        );
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.flipY = false; // match glTF UV space
+        map.generateMipmaps = false;
+        map.minFilter = THREE.LinearFilter;
+        map.magFilter = THREE.LinearFilter;
+        map.needsUpdate = true;
+        return map;
+      };
+      this.eyesAtlasMap = await loadFaceAtlas('eyes-atlas-color.png');
+      this.mouthAtlasMap = await loadFaceAtlas('mouth-atlas-color.png');
       const model = gltf.scene;
 
       const skinnedMeshes: THREE.SkinnedMesh[] = [];
@@ -97,7 +123,12 @@ export class CharacterManager {
         material: m.material as THREE.MeshStandardMaterial
       }));
 
-      const firstSkinnedMesh = skinnedMeshes[0];
+      // Wave 17: keep Blender-baked object-wide face UVs (home cell col0/row3).
+      // Do NOT runtime-reproject with XZ — after glTF, height is +Y; XZ only spanned
+      // shell depth and collapsed atlas V so mouths read as hairlines at iso.
+
+      const firstSkinnedMesh =
+        skinnedMeshes.find(m => m.name.toLowerCase().includes('body')) || skinnedMeshes[0];
       if (firstSkinnedMesh) {
         this.numBones = firstSkinnedMesh.skeleton.bones.length;
         const headBone = firstSkinnedMesh.skeleton.bones.find(b => b.name.toLowerCase() === 'head');
@@ -164,6 +195,62 @@ export class CharacterManager {
   }
 
   /**
+   * Planar-project face shell → one atlas cell using object-wide face-plane bounds.
+   * Fixes per-triangle UV tiling that made faces read as static/QR at iso.
+   *
+   * Wave 17: after glTF, face height lives on +Y (Blender +Z). Projecting XZ mapped
+   * only shell depth → atlas V collapsed to a hairline. Use XY (width × height).
+   */
+  private reprojectFaceAtlasUVs(
+    geometry: THREE.BufferGeometry,
+    col: number,
+    row: number,
+    zoom = 1.0,
+  ) {
+    const pos = geometry.attributes.position;
+    const uv = geometry.attributes.uv;
+    if (!pos || !uv) return;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const dx = Math.max(maxX - minX, 1e-6);
+    const dy = Math.max(maxY - minY, 1e-6);
+
+    let u0 = col / ATLAS_COLS;
+    let u1 = (col + 1) / ATLAS_COLS;
+    let v1 = 1.0 - row / ATLAS_ROWS;
+    let v0 = 1.0 - (row + 1) / ATLAS_ROWS;
+    if (zoom > 1.0) {
+      const midU = (u0 + u1) * 0.5;
+      const midV = (v0 + v1) * 0.5;
+      const halfU = ((u1 - u0) * 0.5) / zoom;
+      const halfV = ((v1 - v0) * 0.5) / zoom;
+      u0 = midU - halfU;
+      u1 = midU + halfU;
+      v0 = midV - halfV;
+      v1 = midV + halfV;
+    }
+
+    for (let i = 0; i < pos.count; i++) {
+      const u = (pos.getX(i) - minX) / dx;
+      // Face height +Y → atlas V (match Blender Z-up bake intent after glTF axis convert).
+      const v = (pos.getY(i) - minY) / dy;
+      uv.setXY(i, u0 + u * (u1 - u0), v0 + v * (v1 - v0));
+    }
+    uv.needsUpdate = true;
+  }
+
+  /**
    * Reads back the GPU position buffer to CPU.
    * Must be called after renderer.compute() each frame.
    * Returns the updated positions (1-frame GPU lag).
@@ -209,6 +296,7 @@ export class CharacterManager {
     const velArray = new Float32Array(this.instanceCount * 4);
     const colorArray = new Float32Array(this.instanceCount * 3);
     const accessoryArray = new Float32Array(this.instanceCount);
+    const scaleArray = new Float32Array(this.instanceCount);
 
     const tempColor = new THREE.Color();
     const spawnRadius = 8; // Default spawn area
@@ -220,6 +308,10 @@ export class CharacterManager {
 
     const system = getActiveAgentSet();
     const allCharacters = getAllCharacters(system);
+
+    // Accessory rules (art-direction.md + readable silhouette):
+    // 0=None (user), 2=Cap (lead — always visible), specialists alternate 1=Headphones / 2=Cap
+    let specialistSlot = 0;
 
     for (let i = 0; i < this.instanceCount; i++) {
       const agentNode = allCharacters.find(a => a.index === i) || system.leadAgent;
@@ -253,14 +345,18 @@ export class CharacterManager {
       colorArray[i * 3 + 1] = tempColor.g;
       colorArray[i * 3 + 2] = tempColor.b;
 
-      // Accessory logic: 0=None, 1=Headphones, 2=Cap
       if (i === system.user.index) {
         accessoryArray[i] = 0;
       } else if (i === system.leadAgent.index) {
-        accessoryArray[i] = 1;
+        accessoryArray[i] = 2; // Cap — team lead signature (art-direction)
       } else {
-        accessoryArray[i] = 2;
+        // Specialists: headphones, cap, headphones, …
+        accessoryArray[i] = (specialistSlot % 2 === 0) ? 1 : 2;
+        specialistSlot++;
       }
+
+      // Cute short/tall variety: deterministic uniform scale in [0.90, 1.12] from agent index
+      scaleArray[i] = 0.90 + (((i * 37 + 11) % 100) / 99) * 0.22;
     }
 
 
@@ -270,6 +366,7 @@ export class CharacterManager {
     this.velAttribute = new THREE.StorageInstancedBufferAttribute(velArray, 4);
     this.colorAttribute = new THREE.InstancedBufferAttribute(colorArray, 3);
     this.accessoryAttribute = new THREE.InstancedBufferAttribute(accessoryArray, 1);
+    this.scaleAttribute = new THREE.InstancedBufferAttribute(scaleArray, 1);
 
     this.positionStorage = storage(this.posAttribute, 'vec4', this.instanceCount);
     this.velocityStorage = storage(this.velAttribute, 'vec4', this.instanceCount);
@@ -293,6 +390,16 @@ export class CharacterManager {
     }
 
     this.expressionBuffer = new ExpressionBuffer(this.instanceCount);
+
+    // Role-flavored idle faces: lead slightly happier, user neutral, specialists vary
+    for (let i = 0; i < this.instanceCount; i++) {
+      if (i === system.user.index) {
+        this.expressionBuffer.setExpression(i, 'neutral');
+      } else if (i === system.leadAgent.index) {
+        this.expressionBuffer.setExpression(i, 'happy');
+      }
+      // Specialists keep ExpressionBuffer's per-index idle personality seed
+    }
 
     this.initComputeNode();
     this.createInstancedMesh();
@@ -320,8 +427,8 @@ export class CharacterManager {
         const waypointXZ = vec3(agentData.x, float(0), agentData.z);
         const toTarget = waypointXZ.sub(pos);
         const dist = toTarget.length();
-        If(dist.greaterThan(float(0.2)), () => {
-          const gotoVel = toTarget.normalize().mul(this.uSpeed.mul(3.0));
+        If(dist.greaterThan(float(AGENT_WAYPOINT_RADIUS)), () => {
+          const gotoVel = toTarget.normalize().mul(this.uSpeed.mul(float(AGENT_MOVE_GOTO_MULT)));
           velElement.assign(vec4(gotoVel, 0.0));
           posElement.assign(vec4(pos.add(gotoVel), 1.0));
         }).Else(() => {
@@ -357,38 +464,54 @@ export class CharacterManager {
       instancedGeometry.copy(geometry as any);
       instancedGeometry.instanceCount = this.instanceCount;
 
-      // Solo dejamos el atributo que NO se calcula en el Compute Shader
-      instancedGeometry.setAttribute('instanceColor', this.colorAttribute);
+      const isEyes = name.toLowerCase().includes('eyes');
+      const isMouth = name.toLowerCase().includes('mouth');
+      const isFace = isEyes || isMouth;
+      const isHeadphones = name.toLowerCase().includes('headphones');
+      const isCap = name.toLowerCase().includes('cap');
+      const isAccessory = isHeadphones || isCap;
+      const isBody = name.toLowerCase().includes('body');
+
+      // Faces must not carry instanceColor — Three auto-tints and turns sclera team-colored.
+      if (!isFace) {
+        instancedGeometry.setAttribute('instanceColor', this.colorAttribute);
+      }
       if (this.accessoryAttribute) instancedGeometry.setAttribute('accessoryType', this.accessoryAttribute);
+      if (this.scaleAttribute) instancedGeometry.setAttribute('instanceScale', this.scaleAttribute);
 
+      // Faces: MeshStandard but lighting-proof — black albedo + full atlas emissive
+      // (MeshBasic + alpha was still reading as dark plates under ACES at iso).
       const material = new THREE.MeshStandardNodeMaterial();
-      material.roughness = 1;
-      material.metalness = 0.25;
 
-      const instanceColor = attribute('instanceColor', 'vec3');
-      const map = (baseMaterial as any).map;
+      const instanceColor = isFace ? vec3(1, 1, 1) : attribute('instanceColor', 'vec3');
+      let map = (baseMaterial as any).map as THREE.Texture | null;
+      // Prefer runtime atlases when loaded; otherwise GLB-embedded maps (correct flipY).
+      if (isEyes && this.eyesAtlasMap) map = this.eyesAtlasMap;
+      if (isMouth && this.mouthAtlasMap) map = this.mouthAtlasMap;
+      // Atlas maps must stay in sRGB; no mipmaps (mips → gray “dark screens” at iso).
+      if (map) {
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.generateMipmaps = false;
+        // Linear (no mips): smooth ovals at iso; Nearest looked like pixel noise on the face card
+        map.minFilter = THREE.LinearFilter;
+        map.magFilter = THREE.LinearFilter;
+        map.needsUpdate = true;
+      }
 
       const expressionData = this.expressionBuffer!.storageNode.element(instanceIndex);
       const animParams = this.agentStateBuffer!.storageNode.element(instanceIndex.mul(2).add(1));
       const instanceAlpha = animParams.z;
       const accessoryType = attribute('accessoryType', 'float');
 
-      const isEyes = name.toLowerCase().includes('eyes');
-      const isMouth = name.toLowerCase().includes('mouth');
-      const isHeadphones = name.toLowerCase().includes('headphones');
-      const isCap = name.toLowerCase().includes('cap');
-
       if (isEyes) {
-        material.uvNode = uv().add(expressionData.xy);
+        // Eyes UVs baked to open-dots (0,0). Relative xy offsets for blink/happy/etc.
+        material.uvNode = uv().add(vec2(expressionData.x, expressionData.y));
       } else if (isMouth) {
-        material.uvNode = uv().add(expressionData.zw);
+        // Mouth UVs baked to closed-smile cell. Relative zw offsets select speaking cells.
+        material.uvNode = uv().add(vec2(expressionData.z, expressionData.w));
       }
 
-      // Solo coloreamos el mesh cuyo nombre sea 'body' o accesorios
       material.transparent = true;
-
-      const isAccessory = isHeadphones || isCap;
-      const isBody = name.toLowerCase().includes('body');
 
       if (isHeadphones) {
         material.opacityNode = accessoryType.equal(float(1)).select(instanceAlpha, float(0));
@@ -397,36 +520,74 @@ export class CharacterManager {
       }
 
       if (isBody || isAccessory) {
+        // Soft matte vinyl / clay-toy read for cute workers
+        material.roughness = 0.68;
+        material.metalness = 0.02;
         material.depthWrite = true;
         material.depthTest = true;
 
         const baseAlpha = isAccessory ? material.opacityNode : (map ? texture(map).a.mul(instanceAlpha) : instanceAlpha);
 
-        if (map) {
+        if (isHeadphones) {
+          // Near-black plastic cups — high contrast vs body hue (Wave 10 iso silhouette)
+          const hpColor = map ? texture(map).rgb.mul(vec3(0.08, 0.08, 0.09)) : vec3(0.07, 0.07, 0.08);
+          material.colorNode = vec4(hpColor, baseAlpha);
+        } else if (isCap) {
+          // Soft team-tinted beanie (not cream-white — that read as a white “face plate”)
+          const softTint = mix(vec3(0.92, 0.9, 0.88), instanceColor, float(0.55));
+          const capRgb = map ? texture(map).rgb.mul(softTint) : softTint;
+          material.colorNode = vec4(capRgb, baseAlpha);
+        } else if (map) {
           const texColor = texture(map);
           material.colorNode = vec4(texColor.rgb.mul(instanceColor), baseAlpha);
         } else {
           material.colorNode = vec4(instanceColor, baseAlpha);
         }
-      } else {
-        // Eyes / mouth: rendered on top of the body surface with polygon offset to avoid
-        // z-fighting, but still respect the depth buffer so they are occluded by walls etc.
+      } else if (isFace) {
+        // Painted-on-vinyl ink: transparent atlas bg, only dark features draw.
+        // depthTest OFF — curved face shells otherwise Z-fight the head and hide one eye
+        // (reads as a permanent wink at iso). Ink-only alpha keeps them from looking like cards.
+        material.roughness = 0.75;
+        material.metalness = 0;
         material.depthWrite = false;
-        material.depthTest = true;
-        material.polygonOffset = true;
-        material.polygonOffsetFactor = -1;
-        material.polygonOffsetUnits = -1;
+        material.depthTest = false;
+        material.side = THREE.DoubleSide;
+        material.alphaTest = 0.08;
 
         if (map) {
-          const texColor = isEyes || isMouth ? texture(map, material.uvNode) : texture(map);
+          map.minFilter = THREE.LinearFilter;
+          map.magFilter = THREE.LinearFilter;
+          map.needsUpdate = true;
+
+          const texColor = texture(map);
+          const faceAlpha = texColor.a.mul(instanceAlpha);
+          // Atlas RGB: white sclera + black pupils/smile (transparent bg — no full face plate).
+          material.colorNode = vec4(texColor.rgb, faceAlpha);
+          material.opacityNode = faceAlpha;
+          // Keep whites bright under ACES; ink stays dark.
+          material.emissiveNode = texColor.rgb.mul(float(0.65));
+        } else {
+          material.opacityNode = float(0);
+        }
+      } else {
+        // Unknown non-body mesh: keep visible but don't steal face treatment
+        material.roughness = 0.6;
+        material.metalness = 0.04;
+        material.depthWrite = false;
+        material.depthTest = true;
+        if (map) {
+          const texColor = texture(map);
           material.colorNode = vec4(texColor.rgb, texColor.a.mul(instanceAlpha));
+          material.opacityNode = texColor.a.mul(instanceAlpha);
         } else {
           material.opacityNode = float(0);
         }
       }
 
-      // Special skinning for static accessories
-      if ((isHeadphones || isCap) && this.headBoneIndex !== -1 && !geometry.attributes.skinIndex) {
+      // Eyes/mouth/cap/headphones must follow the baked skeleton's head bone.
+      // GLB skin indices can disagree with the body skeleton used for bakeAnimation,
+      // which made face cards float beside heads (and accessories drift).
+      if ((isFace || isHeadphones || isCap) && this.headBoneIndex !== -1) {
         const skinIndices = new Float32Array(geometry.attributes.position.count * 4).fill(this.headBoneIndex);
         const skinWeights = new Float32Array(geometry.attributes.position.count * 4).fill(0);
         for (let i = 0; i < geometry.attributes.position.count; i++) skinWeights[i * 4] = 1.0;
@@ -441,10 +602,15 @@ export class CharacterManager {
 
       const instancedMesh = new THREE.Mesh(instancedGeometry, material);
       instancedMesh.frustumCulled = false;
-      instancedMesh.castShadow = true;
-      instancedMesh.receiveShadow = true;
-      // Body renders first (renderOrder 0), features after (renderOrder 1)
-      instancedMesh.renderOrder = name.toLowerCase().includes('body') ? 0 : 1;
+      // Face cards must not darken under self-shadow; body/accessories still cast+receive
+      instancedMesh.castShadow = !isFace;
+      instancedMesh.receiveShadow = !isFace;
+      // Body 0 → accessories 1 → eyes/mouth 10 (decals draw last over vinyl)
+      if (isFace) {
+        instancedMesh.renderOrder = 10;
+      } else {
+        instancedMesh.renderOrder = isBody ? 0 : 1;
+      }
       this.scene.add(instancedMesh);
       this.instancedMeshes.push(instancedMesh);
     }
@@ -496,8 +662,17 @@ export class CharacterManager {
         const animTime = this.uTime.sub(startTime).max(0);
         const t = loopMode.greaterThan(0.5) ? animTime.div(duration).fract() : animTime.div(duration).clamp(0, 1);
 
-        const currentFrame = t.mul(numFrames.toFloat()).toUint();
-        const safeFrame = currentFrame.min(numFrames.sub(uint(1)));
+        // Fractional frame index → lerp bone matrices between adjacent baked frames
+        const frameFloat = t.mul(numFrames.toFloat());
+        const lastFrame = numFrames.sub(uint(1));
+        const frame0 = frameFloat.floor().toUint().min(lastFrame);
+        const frame1Candidate = frame0.add(uint(1));
+        // Looping clips wrap N→0; one-shots hold the final pose
+        const frame1 = loopMode.greaterThan(0.5).select(
+          frame1Candidate.mod(numFrames),
+          frame1Candidate.min(lastFrame)
+        );
+        const frameFrac = frameFloat.fract();
 
         const skinIndex = attribute('skinIndex');
         const skinWeight = attribute('skinWeight');
@@ -505,8 +680,13 @@ export class CharacterManager {
 
         const addInfluence = (boneIdxNode: any, weightNode: any) => {
           If(weightNode.greaterThan(0), () => {
-            const address = animOffset.add(safeFrame.mul(uint(this.numBones))).add(boneIdxNode.toUint());
-            skinMat.addAssign(animBuffer.element(address).mul(weightNode));
+            const boneIdx = boneIdxNode.toUint();
+            const stride = uint(this.numBones);
+            const m0 = animBuffer.element(animOffset.add(frame0.mul(stride)).add(boneIdx));
+            const m1 = animBuffer.element(animOffset.add(frame1.mul(stride)).add(boneIdx));
+            // Element-wise mat4 lerp (WGSL mix() is float/vec only)
+            const boneMat = m0.mul(float(1).sub(frameFrac)).add(m1.mul(frameFrac));
+            skinMat.addAssign(boneMat.mul(weightNode));
           });
         };
 
@@ -519,7 +699,8 @@ export class CharacterManager {
       }
 
       const vertexScale = isVisibleNode.select(float(1), float(0));
-      return rotationMat.mul(finalPosition.mul(vertexScale)).add(instancePos);
+      const instanceScale = attribute('instanceScale', 'float');
+      return rotationMat.mul(finalPosition.mul(vertexScale.mul(instanceScale))).add(instancePos);
     })();
   }
 

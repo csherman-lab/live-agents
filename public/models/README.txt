@@ -1,27 +1,25 @@
 ---
 
-## ASSET INFORMATION & LICENSE
+## LIVE AGENTS 3D ASSETS
 
 Project: Live Agents
-Maintained by: Cameron Sherman (https://github.com/csherman-lab)
-
-Original 3D assets by: Arturo Paracuellos (unboring.net)
+Owner: Cameron Sherman (https://github.com/csherman-lab)
 Year: 2026
 
-LICENSE: Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+LICENSE: MIT (same as project source code)
 
-All 3D models (.glb, .gltf) and textures in this directory remain
-the intellectual property of Arturo Paracuellos and are used under
-CC BY-NC 4.0.
+All files in this directory are original assets created for Live Agents:
 
-TERMS OF USE:
+- office.glb — procedural command-center workspace
+- character.glb — stylized rigged agent with expression atlas
+- textures/ — generated face atlases embedded in character.glb
 
-1. You may use and modify these assets for personal or educational
-   purposes.
-2. You MUST provide credit to Arturo Paracuellos (unboring.net) for the 3D assets.
-3. COMMERCIAL USE IS STRICTLY PROHIBITED. You cannot use these
-   assets or any derivatives in projects that generate revenue.
+## Regenerating assets
 
-For commercial licensing inquiries for the 3D assets, please visit: https://unboring.net
+Requires Blender 3.6+ (tested on Blender 5.x):
+
+  npm run assets:generate
+
+Source scripts live in scripts/blender/.
 
 ---

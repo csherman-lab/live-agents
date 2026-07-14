@@ -39,7 +39,9 @@ export class SceneManager {
   private simulation: AgentSimulation | null = null;
 
   private lastAgentSetId: string | null = null;
+  /** Camera follow target; kept in sync with uiStore.selectedNpcIndex (null → player). */
   private selectedIndex: number | null = null;
+  private inputManager: InputManager | null = null;
   private coreHandler: ((npcIndex: number, text: string) => Promise<string | null>) | null = null;
 
   private unsubs: (() => void)[] = [];
@@ -151,10 +153,15 @@ export class SceneManager {
         if (agent.index !== playerIndex) this.driverManager!.registerNpc(agent.index, agent);
       });
 
-      new InputManager(
+      this.inputManager = new InputManager(
         this.engine.renderer.domElement, this.stage.camera,
         () => this.controller!.getCPUPositions(), () => this.controller!.getCount(),
-        (idx) => { if (useUiStore.getState().isChatting) useUiStore.getState().setChatting(false); this.selectedIndex = idx !== activeSet.user.index ? idx : null; useUiStore.getState().setSelectedNpc(this.selectedIndex); },
+        (idx) => {
+          if (useUiStore.getState().isChatting) useUiStore.getState().setChatting(false);
+          // Single source of truth: UI selection; camera follow syncs via store subscription.
+          const next = idx !== activeSet.user.index ? idx : null;
+          useUiStore.getState().setSelectedNpc(next);
+        },
         (x, z) => this.driverManager?.getPlayerDriver().onFloorClick(x, z),
         (idx, pos) => useUiStore.getState().setHoveredNpc(idx, pos),
         () => this.poiManager.getAllPois(),
@@ -182,6 +189,13 @@ export class SceneManager {
           this.controller.warpAllToSpawn(set.user.index, getAllAgents(set).map(a => a.index));
         }
       }
+
+      // Keyboard / kanban / bubbles / click all go through setSelectedNpc —
+      // keep camera follow + InputManager pick state aligned with UI selection.
+      if (s.selectedNpcIndex !== prev.selectedNpcIndex) {
+        this.syncFollowFromSelection(s.selectedNpcIndex);
+      }
+
       if ((s.isChatting !== prev.isChatting || s.isThinking !== prev.isThinking || s.isTyping !== prev.isTyping) && this.controller) {
         const set = getActiveAgentSet();
         if (s.isChatting && !prev.isChatting && s.selectedNpcIndex !== null) {
@@ -195,7 +209,7 @@ export class SceneManager {
           if (this.controller.getState(user) !== 'walk') this.controller.play(user, s.isTyping ? 'talk' : 'listen');
           this.controller.setSpeaking(user, s.isTyping);
         } else if (!s.isChatting && prev.isChatting) {
-          // Cleanup Chat Visuals
+          // Cleanup Chat Visuals — keep follow on still-selected NPC (chat zoom exits via setChatMode)
           const npc = prev.selectedNpcIndex;
           const user = set.user.index;
           if (npc !== null) {
@@ -206,7 +220,7 @@ export class SceneManager {
           }
           this.controller.setSpeaking(user, false);
           this.controller.play(user, 'idle');
-          this.selectedIndex = null;
+          this.syncFollowFromSelection(s.selectedNpcIndex);
         }
       }
 
@@ -231,6 +245,18 @@ export class SceneManager {
     }
   }
 
+  /** Map UI selection → camera follow + click pick state. Null/player → follow player. */
+  private syncFollowFromSelection(selectedNpcIndex: number | null): void {
+    const player = getActiveAgentSet().user.index;
+    this.selectedIndex =
+      selectedNpcIndex !== null && selectedNpcIndex !== player
+        ? selectedNpcIndex
+        : null;
+    if (this.inputManager) {
+      this.inputManager.selectedIndex = selectedNpcIndex;
+    }
+  }
+
   private _startChatVisuals(npcIndex: number): void {
     if (!this.controller) return;
     const pos = this.controller.getCPUPositions(); if (!pos) return;
@@ -241,7 +267,7 @@ export class SceneManager {
     if (dir.length() < 0.01) dir.set(1, 0, 0);
     const target = npc.clone().addScaledVector(dir, 1.2);
 
-    this.selectedIndex = npcIndex;
+    this.syncFollowFromSelection(npcIndex);
     this.driverManager?.getNpcDriver(npcIndex)?.setChatting(true);
     this.controller.cancelMovement(npcIndex);
     this.controller.play(npcIndex, 'listen');
@@ -386,8 +412,21 @@ export class SceneManager {
       this.updateTransparency(pos, delta);
     });
     const player = getActiveAgentSet().user.index;
+    const ui = useUiStore.getState();
+    const { selectedNpcIndex, setSelectedPosition, selectedPosition, isChatting } = ui;
+
+    // Roam / select follow (NPC or player). Chat framing overrides look-at via setChatSubjects.
     this.stage.setFollowTarget(this.controller?.getCPUPosition(this.selectedIndex ?? player) ?? null);
-    const { selectedNpcIndex, setSelectedPosition, selectedPosition } = useUiStore.getState();
+
+    // While chatting, feed both bodies so Stage can ease into a midpoint conversation shot.
+    if (isChatting && this.controller && selectedNpcIndex !== null && selectedNpcIndex !== player) {
+      const playerPos = this.controller.getCPUPosition(player);
+      const npcPos = this.controller.getCPUPosition(selectedNpcIndex);
+      this.stage.setChatSubjects(playerPos, npcPos);
+    } else {
+      this.stage.setChatSubjects(null, null);
+    }
+
     const npcScreenPositions: Record<number, { x: number; y: number }> = {};
     const rect = this.container.getBoundingClientRect();
     if (this.controller) {
@@ -404,7 +443,7 @@ export class SceneManager {
       const p = npcScreenPositions[selectedNpcIndex];
       if (Math.abs(p.x - (selectedPosition?.x ?? 0)) > 0.5 || Math.abs(p.y - (selectedPosition?.y ?? 0)) > 0.5) setSelectedPosition(p);
     } else if (selectedPosition !== null) setSelectedPosition(null);
-    this.stage.setChatMode(useUiStore.getState().isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO);
+    this.stage.setChatMode(isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO);
     this.engine.render(this.stage.scene, this.stage.camera);
   }
 
@@ -430,6 +469,7 @@ export class SceneManager {
     getAllAgents(set).forEach((a) => this.controller?.setSpeaking(a.index, false));
     this.controller.warpAllToSpawn(set.user.index, getAllAgents(set).map(a => a.index));
     this.stage.setFollowTarget(null);
+    this.stage.setChatSubjects(null, null);
     this.stage.setChatMode(false, false);
   }
 
@@ -440,6 +480,8 @@ export class SceneManager {
     }
     this.resizeObserver.disconnect();
     this.unsubs.forEach(u => u());
+    this.inputManager?.dispose();
+    this.inputManager = null;
     this.driverManager?.dispose();
     this.engine.dispose();
   }

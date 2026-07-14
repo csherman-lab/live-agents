@@ -47,7 +47,6 @@ Copy `.env.example` to `.env` for optional local dev variables (never commit rea
 - **Explore demo** = UI walkthrough only; agents need an API key to actually run.
 - **3D office** needs WebGPU (Chrome, Edge, Safari 18+). Overview chat and planning work without 3D.
 - Keys stay in the browser — nothing is sent to our servers.
-- 3D office assets are **CC BY-NC** (non-commercial). See `LICENSE`.
 
 ## Keyboard shortcuts
 
@@ -66,6 +65,7 @@ npm run lint         # TypeScript check
 npm run test         # Unit tests (Vitest)
 npm run test:e2e     # Smoke tests (Playwright)
 npm run check        # lint + test + build
+npm run assets:generate  # Rebuild 3D models (requires Blender)
 ```
 
 ## Tech Stack
@@ -78,7 +78,7 @@ npm run check        # lint + test + build
 
 ## 3D assets
 
-Office 3D models are credited to Arturo Paracuellos ([unboring.net](https://unboring.net)) under CC BY-NC. See `LICENSE` and `public/models/README.txt`.
+Original MIT-licensed workspace and character models in `public/models/`. See `docs/assets/art-direction.md` and `docs/assets/3d-asset-spec.md`. Regenerate with `npm run assets:generate` (Blender required).
 
 ## License
 

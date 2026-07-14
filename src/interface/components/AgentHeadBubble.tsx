@@ -55,7 +55,7 @@ const AgentHeadBubble: React.FC<AgentHeadBubbleProps> = ({
   agentName,
   variant = 'ambient',
   position,
-  yOffset = -20,
+  yOffset = -36,
   onClick,
 }) => {
   if (!content.primary?.trim()) return null;

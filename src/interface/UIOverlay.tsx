@@ -69,7 +69,7 @@ const UIOverlay: React.FC = () => {
             content={content}
             agentColor={agent.color}
             position={pos}
-            yOffset={-22}
+            yOffset={-40}
             onClick={
               content.clickable
                 ? () => setSelectedNpc(agent.index)
@@ -101,7 +101,7 @@ const UIOverlay: React.FC = () => {
               : focusedAgent.name
           }
           position={focusedPosition}
-          yOffset={-14}
+          yOffset={-32}
           onClick={() => setSelectedNpc(focusedAgent.index)}
         />
       )}

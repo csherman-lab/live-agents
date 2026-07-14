@@ -5,25 +5,41 @@ import {
     ATLAS_COLS, ATLAS_ROWS, BLINK_DURATION, BLINK_FRAME, BLINK_INTERVAL_MIN, BLINK_INTERVAL_RANGE, SPEAKING_FRAME_DURATION
 } from '../constants';
 
+/**
+ * Atlas cells (image top → row 0): ink-only cute eyes/mouths (transparent bg).
+ * Eye mesh UVs live in home cell (0,3); offsets move to the absolute cell origin.
+ * Mouth mesh UVs are baked into closed-smile (1,0); mouth offsets are relative.
+ * No wink cells — resting faces are always two open friendly eyes + a smile.
+ */
 export const EXPRESSIONS: Record<ExpressionKey, { eyes: AtlasCoords; mouth: AtlasCoords }> = {
-  idle: { eyes: { col: 0, row: 3 }, mouth: { col: 1, row: 3 } },
-  listening: { eyes: { col: 1, row: 0 }, mouth: { col: 1, row: 1 } },
-  neutral: { eyes: { col: 0, row: 3 }, mouth: { col: 1, row: 2 } },
-  surprised: { eyes: { col: 0, row: 2 }, mouth: { col: 0, row: 2 } },
-  happy: { eyes: { col: 1, row: 2 }, mouth: { col: 0, row: 3 } },
-  sick: { eyes: { col: 0, row: 1 }, mouth: { col: 0, row: 1 } },
-  wink: { eyes: { col: 0, row: 0 }, mouth: { col: 0, row: 0 } },
-  doubtful: { eyes: { col: 1, row: 0 }, mouth: { col: 0, row: 2 } },
-  sad: { eyes: { col: 1, row: 1 }, mouth: { col: 1, row: 0 } },
+  idle: { eyes: { col: 0, row: 0 }, mouth: { col: 1, row: 0 } },
+  listening: { eyes: { col: 0, row: 2 }, mouth: { col: 1, row: 0 } },
+  neutral: { eyes: { col: 0, row: 0 }, mouth: { col: 1, row: 0 } },
+  surprised: { eyes: { col: 1, row: 2 }, mouth: { col: 1, row: 0 } },
+  // Happy: slightly bigger open dots (not closed/wink arcs)
+  happy: { eyes: { col: 0, row: 1 }, mouth: { col: 1, row: 0 } },
+  sick: { eyes: { col: 0, row: 0 }, mouth: { col: 1, row: 0 } },
+  wink: { eyes: { col: 0, row: 0 }, mouth: { col: 1, row: 0 } },
+  doubtful: { eyes: { col: 1, row: 1 }, mouth: { col: 1, row: 0 } },
+  sad: { eyes: { col: 0, row: 0 }, mouth: { col: 1, row: 3 } },
 };
 
 export const SPEAKING_MOUTH_FRAMES: AtlasCoords[] = [
-  { col: 1, row: 3 },
-  { col: 0, row: 3 },
-  { col: 1, row: 2 },
+  { col: 0, row: 0 },
+  { col: 1, row: 1 },
   { col: 0, row: 2 },
+  { col: 0, row: 3 },
 ];
 
+/** Idle faces stay cute/friendly open eyes — no wink / closed-eye personalities. */
+export const IDLE_PERSONALITIES: ExpressionKey[] = [
+  'idle',
+  'neutral',
+  'happy',
+  'idle',
+  'neutral',
+  'happy',
+];
 /**
  * CPU/GPU buffer that stores per-instance expression data.
  * Each instance maps to one vec4:
@@ -53,9 +69,12 @@ export class ExpressionBuffer {
       this.speakingStates[i] = false;
       this.speakingFrames[i] = 0;
       this.speakingTimers[i] = 0;
-      this.blinkTimers[i] = BLINK_INTERVAL_MIN + Math.random() * BLINK_INTERVAL_RANGE;
+      // Stagger blinks so faces don't blink in lockstep
+      this.blinkTimers[i] = BLINK_INTERVAL_MIN + ((i * 47) % 100) / 100 * BLINK_INTERVAL_RANGE;
       this.isBlinking[i] = false;
-      this.setExpression(i, 'idle');
+      // Per-instance idle cell — strangers see slightly different stares
+      const personality = IDLE_PERSONALITIES[(i * 3 + 1) % IDLE_PERSONALITIES.length];
+      this.setExpression(i, personality);
     }
   }
 
@@ -84,14 +103,22 @@ export class ExpressionBuffer {
   }
 
   private setEyeOffset(index: number, coords: AtlasCoords) {
-    this.array[index * 4 + 0] = coords.col * (1 / ATLAS_COLS);
-    this.array[index * 4 + 1] = 1.0 - (coords.row + 1) * (1 / ATLAS_ROWS);
+    // Eyes mesh UVs bake into open-dots cell (col0,row0). Offsets are relative — same
+    // as mouths — so resting faces need no UV add (avoids wink/home-cell mistakes).
+    const baseU = 0 * (1 / ATLAS_COLS);
+    const baseV = 1.0 - (0 + 1) * (1 / ATLAS_ROWS);
+    this.array[index * 4 + 0] = coords.col * (1 / ATLAS_COLS) - baseU;
+    this.array[index * 4 + 1] = 1.0 - (coords.row + 1) * (1 / ATLAS_ROWS) - baseV;
     this.attribute.needsUpdate = true;
   }
 
   private setMouthOffset(index: number, coords: AtlasCoords) {
-    this.array[index * 4 + 2] = coords.col * (1 / ATLAS_COLS);
-    this.array[index * 4 + 3] = 1.0 - (coords.row + 1) * (1 / ATLAS_ROWS);
+    // Mouth mesh UVs are baked into closed-smile cell (col1,row0). Offsets are relative
+    // to that origin so resting smiles need no GPU add (Wave 17 TSL .zw was a no-op).
+    const baseU = 1 * (1 / ATLAS_COLS);
+    const baseV = 1.0 - (0 + 1) * (1 / ATLAS_ROWS);
+    this.array[index * 4 + 2] = coords.col * (1 / ATLAS_COLS) - baseU;
+    this.array[index * 4 + 3] = 1.0 - (coords.row + 1) * (1 / ATLAS_ROWS) - baseV;
     this.attribute.needsUpdate = true;
   }
 

@@ -20,7 +20,7 @@ const WebGPUFallbackOverlay: React.FC<WebGPUFallbackOverlayProps> = ({
   >
     {showStaticPreview && (
       <img
-        src={`${import.meta.env.BASE_URL}images/the-delegation-UI.jpg`}
+        src={`${import.meta.env.BASE_URL}images/office-preview.jpg`}
         alt=""
         className="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none"
         aria-hidden

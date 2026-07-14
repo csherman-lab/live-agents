@@ -7,7 +7,8 @@ export class Engine {
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGPURenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    // Cap DPR to avoid 3×/4× fill on retina without softening the soft-office look
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight, false);
 
     // Ensure the canvas is sized by CSS so physical resizing is fluid
@@ -17,6 +18,11 @@ export class Engine {
 
     // Use default shadow map (PCF) as VSM support in WebGPU/NodeMaterial can be sensitive
     this.renderer.shadowMap.enabled = true;
+
+    // Soft high-key contrast: ACES compresses chalky whites; mild exposure keeps the scene bright.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     container.appendChild(this.renderer.domElement);
     this.timer = new THREE.Timer();

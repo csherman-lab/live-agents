@@ -64,14 +64,14 @@ const STEPS: Step[] = [
   },
   {
     id: 'workspace',
-    eyebrow: 'The workspace',
-    title: 'Overview or immersive 3D',
+    eyebrow: 'Watch live',
+    title: 'Orbit, follow, read the room',
     lead:
-      'Use Command Center for planning and chat. Enter the 3D office when you want spatial presence — optional, not required.',
+      'After Go Live, explore the 3D office. Drag to look around, then follow any agent and read what they’re doing.',
     bullets: [
-      'Chat with your lead agent from overview — no WebGPU needed',
-      '3D office shows agents at desks when WebGPU is available',
-      'Retry or open in another browser if 3D fails to load',
+      'Drag to orbit · scroll to zoom the office',
+      'Press 1–9 or click an agent to follow them',
+      'Status bubbles show what each agent is doing',
     ],
   },
   {
@@ -82,7 +82,7 @@ const STEPS: Step[] = [
       'Start in the Command Center, launch into the 3D workspace, and let specialists handle the work.',
     bullets: [
       'Write a brief or pick a project template',
-      'Hit Go Live to enter the immersive simulation',
+      'Hit Go Live (or press G) to enter the immersive simulation',
       'Review outputs, export deliverables, and iterate',
     ],
   },
@@ -117,7 +117,7 @@ const STEPS: Step[] = [
     lead:
       'You are set. Brief your team, chat from overview, or jump into Go Live.',
     bullets: [
-      'G — Go Live · S — Settings · ? — all shortcuts',
+      'G — Go Live · 1–9 — follow an agent · ? — shortcuts',
       'Chat with lead agent from Command Center (text-first)',
       'Replay this intro from Settings anytime',
     ],
@@ -161,23 +161,34 @@ function StepVisual({
         <div className="la-onboard__scene la-onboard__scene--workspace">
           <div className="la-onboard__workspace-frame">
             <div className="la-onboard__workspace-grid" />
+            <div className="la-onboard__workspace-orbit" aria-hidden />
             <div
               className="la-onboard__workspace-agent"
-              style={{ left: '22%', top: '35%', background: '#007aff' }}
+              style={{ left: '22%', top: '42%', background: '#007aff' }}
+            />
+            <div
+              className="la-onboard__workspace-agent is-followed"
+              style={{ left: '52%', top: '36%', background: '#af52de', animationDelay: '-0.8s' }}
+            >
+              <span className="la-onboard__workspace-bubble">Researching…</span>
+            </div>
+            <div
+              className="la-onboard__workspace-agent"
+              style={{ left: '72%', top: '58%', background: '#34c759', animationDelay: '-1.6s' }}
             />
             <div
               className="la-onboard__workspace-agent"
-              style={{ left: '55%', top: '28%', background: '#af52de', animationDelay: '-0.8s' }}
+              style={{ left: '34%', top: '64%', background: '#ff9500', animationDelay: '-2.4s' }}
             />
-            <div
-              className="la-onboard__workspace-agent"
-              style={{ left: '68%', top: '55%', background: '#34c759', animationDelay: '-1.6s' }}
-            />
-            <div
-              className="la-onboard__workspace-agent"
-              style={{ left: '35%', top: '62%', background: '#ff9500', animationDelay: '-2.4s' }}
-            />
+            <div className="la-onboard__workspace-keys" aria-hidden>
+              <kbd>1</kbd>
+              <kbd>2</kbd>
+              <kbd>3</kbd>
+              <span>…</span>
+              <kbd>9</kbd>
+            </div>
           </div>
+          <p className="la-onboard__workspace-caption">Drag · scroll · click or 1–9</p>
         </div>
       );
 
