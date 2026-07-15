@@ -29,7 +29,7 @@ Live Agents uses a **clean command-center** aesthetic aligned with the app UI:
 
 - Body proportions matched to reference AABB (~0.81 × 0.78 × 1.23)
 - Expression atlases from reference style on `eyes` / `mouth` planes (2×4 grid)
-- Accessories: `cap` (team lead), `headphones` (specialists)
+- Accessories: `cap` (team lead), `headphones` (specialists) — **team-colored** like the body (soft lift on cap, slightly darker muffs), matching `office-preview.jpg`
 - Twelve animation clips from the shared rig (Idle, Walk, etc.)
 
 ## Differentiation

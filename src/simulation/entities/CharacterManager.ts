@@ -82,12 +82,12 @@ export class CharacterManager {
     dracoLoader.setDecoderPath(DRACO_LIB_PATH);
     loader.setDRACOLoader(dracoLoader);
     try {
-      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb?v=187`);
+      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb?v=250`);
       // Face atlases: white eye whites + black pupils + thick smile. Cache-bust beats GLB embeds.
       const texLoader = new THREE.TextureLoader();
       const loadFaceAtlas = async (file: string) => {
         const map = await texLoader.loadAsync(
-          `${import.meta.env.BASE_URL}models/textures/${file}?v=187`,
+          `${import.meta.env.BASE_URL}models/textures/${file}?v=250`,
         );
         map.colorSpace = THREE.SRGBColorSpace;
         map.flipY = false; // match glTF UV space
@@ -479,8 +479,8 @@ export class CharacterManager {
       if (this.accessoryAttribute) instancedGeometry.setAttribute('accessoryType', this.accessoryAttribute);
       if (this.scaleAttribute) instancedGeometry.setAttribute('instanceScale', this.scaleAttribute);
 
-      // Faces: MeshStandard but lighting-proof — black albedo + full atlas emissive
-      // (MeshBasic + alpha was still reading as dark plates under ACES at iso).
+      // Soft vinyl via Standard (SSS Physical crushed blues into near-black without IBL).
+      // Faces: Standard + atlas emissive so white sclera survives ACES at iso.
       const material = new THREE.MeshStandardNodeMaterial();
 
       const instanceColor = isFace ? vec3(1, 1, 1) : attribute('instanceColor', 'vec3');
@@ -520,22 +520,25 @@ export class CharacterManager {
       }
 
       if (isBody || isAccessory) {
-        // Soft matte vinyl / clay-toy read for cute workers
-        material.roughness = 0.68;
-        material.metalness = 0.02;
+        // Soft vinyl sheen without SSS (R5 SSS made rear/shadow sides read as black blobs).
+        material.roughness = isHeadphones ? 0.55 : 0.52;
+        material.metalness = 0;
         material.depthWrite = true;
         material.depthTest = true;
+        // Discard hidden accessory instances completely (opacity 0 alone still shaded jet black).
+        if (isAccessory) material.alphaTest = 0.05;
 
         const baseAlpha = isAccessory ? material.opacityNode : (map ? texture(map).a.mul(instanceAlpha) : instanceAlpha);
 
         if (isHeadphones) {
-          // Near-black plastic cups — high contrast vs body hue (Wave 10 iso silhouette)
-          const hpColor = map ? texture(map).rgb.mul(vec3(0.08, 0.08, 0.09)) : vec3(0.07, 0.07, 0.08);
+          // Team-colored plush muffs (preview) — slightly darker than body so cups separate.
+          const muffRgb = instanceColor.mul(float(0.82));
+          const hpColor = map ? texture(map).rgb.mul(muffRgb) : muffRgb;
           material.colorNode = vec4(hpColor, baseAlpha);
         } else if (isCap) {
-          // Soft team-tinted beanie (not cream-white — that read as a white “face plate”)
-          const softTint = mix(vec3(0.92, 0.9, 0.88), instanceColor, float(0.55));
-          const capRgb = map ? texture(map).rgb.mul(softTint) : softTint;
+          // Team-colored baseball cap — soft lift vs body (not cream plate).
+          const capTint = mix(vec3(1.0, 1.0, 1.0), instanceColor, float(0.88));
+          const capRgb = map ? texture(map).rgb.mul(capTint) : capTint;
           material.colorNode = vec4(capRgb, baseAlpha);
         } else if (map) {
           const texColor = texture(map);
@@ -602,9 +605,9 @@ export class CharacterManager {
 
       const instancedMesh = new THREE.Mesh(instancedGeometry, material);
       instancedMesh.frustumCulled = false;
-      // Face cards must not darken under self-shadow; body/accessories still cast+receive
-      instancedMesh.castShadow = !isFace;
-      instancedMesh.receiveShadow = !isFace;
+      // Faces skip shadows. Headphones skip cast — jet cups were painting body backs black.
+      instancedMesh.castShadow = !isFace && !isHeadphones;
+      instancedMesh.receiveShadow = isBody;
       // Body 0 → accessories 1 → eyes/mouth 10 (decals draw last over vinyl)
       if (isFace) {
         instancedMesh.renderOrder = 10;

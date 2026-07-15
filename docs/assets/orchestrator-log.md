@@ -413,6 +413,17 @@ Re-checked `?v=160` after W18. No new P0 delight breaks vs closed bars (faces/mo
 
 ---
 
+## Character ref-loop (2026-07-15)
+
+### R4-SILHOUETTE — DONE (`?v=230`)
+Closed body silhouette residual vs `/tmp/ref-character.glb`: arm xspan **0.718** (was 0.806 / REF 0.697), head width **0.735** (was 0.680 / REF 0.735), AABB **0.735×0.700×1.248** ≈ REF. Walk contracts PASS. Stranger-test **PASS** on proportions; next lever vinyl softness.
+
+### R5-MATERIAL — DONE (`?v=240`)
+Runtime body/accessory → `MeshSSSNodeMaterial` soft vinyl (rough **0.68→0.45**, sheen 0.30, IOR 1.45, mild SSS). Faces untouched. REF GLB has no body materials. Visual **PASS** vs chalky R4 / toward `office-preview.jpg` soft-plastic sheen. No GLB remesh.
+
+---
+
 ## Running checklist
 - [x] Waves 1–18
 - [x] Wave 19 stranger re-QA (stable)
+- [x] Character ref-loop R1–R5 (silhouette / accessories / face / silhouette residual / material)

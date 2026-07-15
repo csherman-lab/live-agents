@@ -40,8 +40,9 @@ def ensure_reference_character() -> None:
         return
     os.makedirs(os.path.dirname(REF_CHARACTER), exist_ok=True)
     with open(REF_CHARACTER, 'wb') as out:
+        # Charter blob: commit 073f2d5 (not whatever HEAD currently ships).
         subprocess.run(
-            ['git', 'show', 'HEAD:public/models/character.glb'],
+            ['git', 'show', '073f2d5:public/models/character.glb'],
             cwd=ROOT,
             stdout=out,
             check=True,
@@ -278,17 +279,18 @@ def adapt_ref_body(src_body: bpy.types.Object, body_mat) -> bpy.types.Object:
     # Mild vinyl soften ONLY — Remesh/over-smooth re-fuses stubby limbs into a bean.
     # Keep this light: ref topology already has underarm/crotch valleys we must not erase.
     smooth = body.modifiers.new('Smooth', 'SMOOTH')
-    smooth.factor = 0.05
+    smooth.factor = 0.04
     smooth.iterations = 1
     _apply_modifiers(body)
 
-    # Art-direction AABB ≈ (0.81 × 0.78 × 1.23). Uniform-ish scale preserves limb gaps.
+    # R4-SILHOUETTE: REF AABB 0.735×0.697×1.250 — fat-head pill, stubby arms (not wings).
+    # R1 pad (0.76/0.78 arms / 0.68 head) left arm_xspan +15.6% and head −7.5%.
     mn, mx = _body_aabb(body)
     size = mx - mn
-    target = Vector((0.81, 0.78, 1.23))
-    sx = max(0.85, min(1.25, target.x / max(size.x, 1e-6)))
-    sy = max(0.85, min(1.25, target.y / max(size.y, 1e-6)))
-    sz = max(0.90, min(1.15, target.z / max(size.z, 1e-6)))
+    target = Vector((0.735, 0.700, 1.248))
+    sx = max(0.90, min(1.12, target.x / max(size.x, 1e-6)))
+    sy = max(0.90, min(1.12, target.y / max(size.y, 1e-6)))
+    sz = max(0.95, min(1.08, target.z / max(size.z, 1e-6)))
     for v in body.data.vertices:
         v.co.x *= sx
         v.co.y *= sy
@@ -298,15 +300,14 @@ def adapt_ref_body(src_body: bpy.types.Object, body_mat) -> bpy.types.Object:
         v.co.z -= min_z - 0.01
     body.data.update()
 
-    # Iso fix: ref head ≈ arm width, so head dominates the silhouette and reads as a pill.
-    # Slim the crown and push stubby arms past it — keep ref valleys, don't metaball.
-    _slim_head_bulb(body, max_head_width=0.60)
+    # Fat head (~REF 0.735) ≥ arm stubs (~0.72) — deepen valleys, mild A-pose only.
+    _fit_head_width(body, target_width=0.730)
     _soft_limb_hints_ref(body)
     _a_pose_arms_ref(body)
     _face_mask_indent(body)
 
-    # Contract floor: arm band clearly past head (≥ 0.80; aim ~0.88 for iso).
-    _ensure_arm_xspan(body, target=0.88, z_lo=0.20, z_hi=0.54)
+    # Clamp arm-band xspan into ~0.70–0.75 (REF 0.697) — shrink OR grow, never Wave-9.
+    _clamp_arm_xspan(body, target=0.720, z_lo=0.20, z_hi=0.54)
 
     # Re-ground after sculpt
     min_z = min(v.co.z for v in body.data.vertices)
@@ -332,122 +333,159 @@ def adapt_ref_body(src_body: bpy.types.Object, body_mat) -> bpy.types.Object:
 
 
 def _soft_limb_hints_ref(body: bpy.types.Object) -> None:
-    """Deepen underarm/crotch valleys on the reference silhouette — keep person, don't melt."""
+    """Deepen underarm/crotch valleys toward REF language — keep person, don't melt."""
     for v in body.data.vertices:
         x, y, z = v.co.x, v.co.y, v.co.z
         ax = abs(x)
         # Underarm notch — carve between torso and arm buds so iso sees a gap
-        if 0.30 <= z <= 0.58 and 0.030 <= ax <= 0.185:
-            t = 1.0 - abs(ax - 0.100) / 0.075
+        if 0.30 <= z <= 0.58 and 0.020 <= ax <= 0.175:
+            t = 1.0 - abs(ax - 0.090) / 0.070
             t = max(0.0, min(1.0, t))
-            v.co.x *= 1.0 - 0.32 * t
-            v.co.y *= 1.0 - 0.08 * t
-        # Crotch valley — separate stubby legs
-        if 0.02 <= z <= 0.24 and ax <= 0.105:
-            t = 1.0 - ax / 0.105
-            v.co.x *= 1.0 - 0.30 * t
-            v.co.z += 0.010 * t
+            v.co.x *= 1.0 - 0.52 * t
+            v.co.y *= 1.0 - 0.14 * t
+        # Crotch valley — REF crotch_hw med≈0.10; R1 still ~0.155
+        if 0.02 <= z <= 0.22 and ax <= 0.100:
+            t = 1.0 - ax / 0.100
+            v.co.x *= 1.0 - 0.62 * t
+            v.co.z += 0.016 * t
         # Soft neck pinch — two volumes (head vs torso)
         if 0.52 <= z <= 0.62 and ax <= 0.16:
             t = 1.0 - ax / 0.16
-            v.co.x *= 1.0 - 0.07 * t
-            v.co.y *= 1.0 - 0.05 * t
-        # Outer arm reach — tip stubs past the (slimmed) head
-        if 0.24 <= z <= 0.54 and ax >= 0.16:
-            t = min(1.0, (ax - 0.16) / 0.18)
-            v.co.x *= 1.0 + 0.14 * t
-        # Outer leg reach — keep feet/shins from reading as one stump
-        if 0.01 <= z <= 0.24 and ax >= 0.08:
-            t = min(1.0, (ax - 0.08) / 0.10)
-            v.co.x *= 1.0 + 0.10 * t
-    body.data.update()
-
-
-def _a_pose_arms_ref(body: bpy.types.Object) -> None:
-    """Stronger mild A-pose so top-down iso sees stubby arms past the head."""
-    for v in body.data.vertices:
-        x, y, z = v.co.x, v.co.y, v.co.z
-        ax = abs(x)
-        if 0.20 <= z <= 0.56 and ax >= 0.12:
-            t = min(1.0, (ax - 0.12) / 0.24)
-            # Forward-out for isometric silhouette (camera looks from +Y toward −Y)
-            v.co.y -= 0.068 * t
-            v.co.x *= 1.0 + 0.09 * t
-            v.co.z -= 0.014 * t
-        # Hand tips a bit more forward / out
-        if 0.18 <= z <= 0.36 and ax >= 0.28:
-            t = min(1.0, (ax - 0.28) / 0.16)
-            v.co.y -= 0.036 * t
+            v.co.x *= 1.0 - 0.06 * t
+            v.co.y *= 1.0 - 0.04 * t
+        # Outer arm tip — tiny only (R1 +0.06 stacked with A-pose → wing span)
+        if 0.24 <= z <= 0.54 and ax >= 0.18:
+            t = min(1.0, (ax - 0.18) / 0.14)
+            v.co.x *= 1.0 + 0.015 * t
+        # Outer leg reach — stubby feet without flaring stance
+        if 0.01 <= z <= 0.22 and ax >= 0.09:
+            t = min(1.0, (ax - 0.09) / 0.09)
             v.co.x *= 1.0 + 0.04 * t
     body.data.update()
 
 
-def _ensure_arm_xspan(
+def _a_pose_arms_ref(body: bpy.types.Object) -> None:
+    """Mild A-pose: mostly forward (−Y) so iso reads stubs — almost no X inflate."""
+    for v in body.data.vertices:
+        x, y, z = v.co.x, v.co.y, v.co.z
+        ax = abs(x)
+        if 0.20 <= z <= 0.56 and ax >= 0.13:
+            t = min(1.0, (ax - 0.13) / 0.22)
+            # Forward for isometric silhouette; X nudge tiny (clamp handles span)
+            v.co.y -= 0.042 * t
+            v.co.x *= 1.0 + 0.015 * t
+            v.co.z -= 0.008 * t
+        # Hand tips a bit more forward
+        if 0.18 <= z <= 0.36 and ax >= 0.26:
+            t = min(1.0, (ax - 0.26) / 0.16)
+            v.co.y -= 0.020 * t
+    body.data.update()
+
+
+def _arm_band_verts(body: bpy.types.Object, z_lo: float, z_hi: float):
+    """Arm / shoulder-band verts — exclude head-ish upper midline."""
+    out = []
+    for v in body.data.vertices:
+        if not (z_lo <= v.co.z <= z_hi):
+            continue
+        ax = abs(v.co.x)
+        if v.co.z > 0.50 and ax < 0.22:
+            continue
+        if ax >= 0.10 or v.co.y < -0.015:
+            out.append(v)
+    return out
+
+
+def _clamp_arm_xspan(
     body: bpy.types.Object,
-    target: float = 0.88,
-    z_lo: float = 0.16,
-    z_hi: float = 0.48,
+    target: float = 0.72,
+    z_lo: float = 0.20,
+    z_hi: float = 0.54,
 ) -> None:
-    """Push stubby ARMS until arm-band xspan clears target — never inflate the head."""
-
-    def _arm_verts():
-        # Arms live below the head bulb, outboard and/or A-posed forward (−Y).
-        out = []
-        for v in body.data.vertices:
-            if not (z_lo <= v.co.z <= z_hi):
-                continue
-            ax = abs(v.co.x)
-            # Exclude head-ish upper midline; require outboard or forward stub
-            if v.co.z > 0.50 and ax < 0.22:
-                continue
-            if ax >= 0.10 or v.co.y < -0.015:
-                out.append(v)
-        return out
-
-    for _ in range(8):
-        arms = _arm_verts()
-        if not arms:
-            return
-        xs = [v.co.x for v in arms]
-        xspan = max(xs) - min(xs)
-        if xspan >= target:
-            break
-        need = target / max(xspan, 1e-6)
-        for v in arms:
-            ax = abs(v.co.x)
-            if ax > 0.12:
-                v.co.x *= need
-                v.co.y -= 0.008 * min(1.0, (ax - 0.12) / 0.24)
-            elif ax > 0.05:
-                t = (ax - 0.05) / 0.07
-                sign = 1.0 if v.co.x >= 0.0 else -1.0
-                v.co.x += sign * 0.080 * t * need
-                v.co.y -= 0.024 * t
-            elif v.co.y < -0.02:
-                # Forward stubs near midline — shove sideways into arm silhouette
-                sign = 1.0 if v.co.x >= 0.0 else -1.0
-                if abs(v.co.x) < 1e-4:
-                    continue
-                v.co.x += sign * 0.040 * need
-        body.data.update()
-
-    arms = _arm_verts()
+    """Hold arm-band xspan near target — grow stubs if short, pinch if wingy."""
+    arms = _arm_band_verts(body, z_lo, z_hi)
     if not arms:
         return
     xs = [v.co.x for v in arms]
     xspan = max(xs) - min(xs)
-    if xspan < target:
-        pad = 0.5 * (target - xspan) + 0.012
+
+    if xspan > target + 0.008:
+        # Shrink outboard verts toward midline (keeps underarm valleys)
+        scale = target / max(xspan, 1e-6)
         for v in arms:
-            if v.co.x > 0.08:
-                v.co.x += pad
-            elif v.co.x < -0.08:
-                v.co.x -= pad
+            ax = abs(v.co.x)
+            if ax < 0.06:
+                continue
+            # Stronger pinch at tips so valleys stay carved
+            w = min(1.0, (ax - 0.06) / 0.22)
+            v.co.x *= 1.0 + (scale - 1.0) * (0.55 + 0.45 * w)
         body.data.update()
+        arms = _arm_band_verts(body, z_lo, z_hi)
+        xs = [v.co.x for v in arms]
+        xspan = max(xs) - min(xs)
+
+    if xspan < target - 0.010:
+        for _ in range(6):
+            arms = _arm_band_verts(body, z_lo, z_hi)
+            if not arms:
+                return
+            xs = [v.co.x for v in arms]
+            xspan = max(xs) - min(xs)
+            if xspan >= target:
+                break
+            need = target / max(xspan, 1e-6)
+            for v in arms:
+                ax = abs(v.co.x)
+                if ax > 0.12:
+                    v.co.x *= need
+                    v.co.y -= 0.006 * min(1.0, (ax - 0.12) / 0.24)
+                elif ax > 0.05:
+                    t = (ax - 0.05) / 0.07
+                    sign = 1.0 if v.co.x >= 0.0 else -1.0
+                    v.co.x += sign * 0.060 * t * need
+                    v.co.y -= 0.018 * t
+                elif v.co.y < -0.02 and abs(v.co.x) > 1e-4:
+                    sign = 1.0 if v.co.x >= 0.0 else -1.0
+                    v.co.x += sign * 0.030 * need
+            body.data.update()
+
+        arms = _arm_band_verts(body, z_lo, z_hi)
+        if arms:
+            xs = [v.co.x for v in arms]
+            xspan = max(xs) - min(xs)
+            if xspan < target:
+                pad = 0.5 * (target - xspan)
+                for v in arms:
+                    if v.co.x > 0.08:
+                        v.co.x += pad
+                    elif v.co.x < -0.08:
+                        v.co.x -= pad
+                body.data.update()
+
+
+def _fit_head_width(body: bpy.types.Object, target_width: float = 0.730) -> None:
+    """Scale head bulb X toward REF fat-head (~0.735) — grow or slim."""
+    zs = [v.co.z for v in body.data.vertices]
+    z_max = max(zs)
+    head_lo = z_max * 0.48
+    head = [v for v in body.data.vertices if v.co.z >= head_lo]
+    if not head:
+        return
+    xs = [v.co.x for v in head]
+    hw = max(xs) - min(xs)
+    if abs(hw - target_width) < 0.006:
+        return
+    scale = target_width / max(hw, 1e-6)
+    scale = max(0.92, min(1.20, scale))
+    for v in head:
+        v.co.x *= scale
+        # Soften Y so the head stays round, not a flat coin
+        v.co.y *= 0.5 + 0.5 * scale
+    body.data.update()
 
 
 def _slim_head_bulb(body: bpy.types.Object, max_head_width: float = 0.58) -> None:
-    """Keep the head bulb narrower than outstretched arms (anti-bean)."""
+    """Legacy slim-only helper — prefer _fit_head_width for R4 fat-head."""
     zs = [v.co.z for v in body.data.vertices]
     z_max = max(zs)
     head_lo = z_max * 0.48
@@ -461,9 +499,18 @@ def _slim_head_bulb(body: bpy.types.Object, max_head_width: float = 0.58) -> Non
     scale = max_head_width / max(hw, 1e-6)
     for v in head:
         v.co.x *= scale
-        # Soften Y slightly so the head stays round, not a flat coin
         v.co.y *= 0.5 + 0.5 * scale
     body.data.update()
+
+
+def _ensure_arm_xspan(
+    body: bpy.types.Object,
+    target: float = 0.88,
+    z_lo: float = 0.16,
+    z_hi: float = 0.48,
+) -> None:
+    """Grow-only arm span (legacy). Prefer _clamp_arm_xspan for bi-directional fit."""
+    _clamp_arm_xspan(body, target=target, z_lo=z_lo, z_hi=z_hi)
 
 
 def _soft_limb_hints(body: bpy.types.Object) -> None:
@@ -548,63 +595,97 @@ def _face_mask_indent(body: bpy.types.Object) -> None:
 
 
 def _make_baseball_cap(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
-    """Tall soft beanie — reads at iso dist~13 (Wave 10 silhouette)."""
+    """Cute vinyl baseball cap — low crown + clear forward brim (preview language)."""
+    # Crown sits on the head; brim reaches toward face (−Y) without covering eyes.
+    crown_z = top_z - 0.08
     bpy.ops.mesh.primitive_uv_sphere_add(
-        location=Vector((0.0, 0.004, top_z - 0.008)),
-        radius=0.178,
-        segments=28,
-        ring_count=16,
+        location=Vector((0.0, 0.02, crown_z)),
+        radius=0.275,
+        segments=32,
+        ring_count=18,
     )
     dome = bpy.context.active_object
     dome.name = 'cap_dome'
     bpy.ops.object.mode_set(mode='OBJECT')
-    # Flatten underside so it hugs the crown like a beanie
     for v in dome.data.vertices:
-        if v.co.z < -0.040:
-            v.co.z = -0.040 + (v.co.z + 0.040) * 0.10
-            v.co.x *= 0.90
-            v.co.y *= 0.90
-        # Soft rounded peak (taller beanie puff for iso silhouette)
-        if v.co.z > 0.028:
-            v.co.x *= 0.86
-            v.co.y *= 0.86
-            v.co.z *= 1.22
-    # Tall soft dome — unmistakable crown bump vs bare head / headphones
-    dome.scale = (1.14, 1.10, 1.12)
+        # Flat underside so it seats like a real cap shell
+        if v.co.z < -0.04:
+            v.co.z = -0.04 + (v.co.z + 0.04) * 0.06
+            v.co.x *= 0.94
+            v.co.y *= 0.94
+        # Soft panel taper at crown peak
+        if v.co.z > 0.05:
+            v.co.x *= 0.82
+            v.co.y *= 0.82
+            v.co.z *= 0.88
+    dome.scale = (1.22, 1.12, 0.72)
     bpy.ops.object.transform_apply(scale=True)
     assign_material(dome, acc_mat)
     add_subsurf(dome, 1)
     _apply_modifiers(dome)
     shade_smooth(dome)
 
-    # Rolled cuff only (no forward platter brim) — thicker for iso read
+    # Classic baseball platter brim — long toward −Y, short at back
+    brim = add_cylinder(
+        'cap_brim',
+        Vector((0.0, -0.20, top_z - 0.19)),
+        radius=0.20,
+        depth=0.022,
+        material=acc_mat,
+        vertices=36,
+    )
+    brim.scale = (1.45, 1.85, 0.48)
+    bpy.ops.object.transform_apply(scale=True)
+    for v in brim.data.vertices:
+        if v.co.y < 0.0:
+            v.co.y *= 1.12
+            v.co.z -= 0.010  # gentle droop at tip
+        else:
+            v.co.y *= 0.42
+            v.co.z += 0.004
+    bevel = brim.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.010
+    bevel.segments = 2
+    add_subsurf(brim, 1)
+    _apply_modifiers(brim)
+    shade_smooth(brim)
+
+    # Sweatband / cuff hugging the headline
     rim = add_cylinder(
         'cap_rim',
-        Vector((0.0, 0.002, top_z - 0.078)),
-        radius=0.172,
-        depth=0.044,
+        Vector((0.0, 0.01, top_z - 0.175)),
+        radius=0.285,
+        depth=0.042,
         material=acc_mat,
-        vertices=28,
+        vertices=32,
     )
-    rim.scale = (1.06, 1.04, 0.62)
+    rim.scale = (1.06, 1.00, 0.72)
     bpy.ops.object.transform_apply(scale=True)
     for v in rim.data.vertices:
         ax = math.sqrt(v.co.x * v.co.x + v.co.y * v.co.y)
-        if ax > 0.12 and v.co.z < 0.0:
-            v.co.z -= 0.010
-            # Soft outward roll
-            v.co.x *= 1.06
-            v.co.y *= 1.06
-    bevel = rim.modifiers.new('Bevel', 'BEVEL')
-    bevel.width = 0.014
-    bevel.segments = 2
+        if ax > 0.16 and v.co.z < 0.0:
+            v.co.z -= 0.006
+            v.co.x *= 1.03
+            v.co.y *= 1.03
     add_subsurf(rim, 1)
     _apply_modifiers(rim)
     shade_smooth(rim)
 
+    # Crown button
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        location=Vector((0.0, 0.03, top_z + 0.048)),
+        radius=0.024,
+        segments=12,
+        ring_count=8,
+    )
+    button = bpy.context.active_object
+    button.name = 'cap_button'
+    assign_material(button, acc_mat)
+    shade_smooth(button)
+
     bpy.ops.object.select_all(action='DESELECT')
-    dome.select_set(True)
-    rim.select_set(True)
+    for obj in (dome, brim, rim, button):
+        obj.select_set(True)
     bpy.context.view_layer.objects.active = dome
     bpy.ops.object.join()
     cap = bpy.context.active_object
@@ -614,20 +695,21 @@ def _make_baseball_cap(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
 
 
 def _make_headphones(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
-    """Chunky cute cups — ear paddles read at iso vs beanie (Wave 10)."""
-    ear_z = top_z - 0.26
-    radius = 0.238
-    y = -0.01
+    """Plush team-colored ear muffs — round cups + thin arch band (preview language)."""
+    ear_z = top_z - 0.42
+    radius = 0.348
+    y = -0.04  # forward of rear silhouette so backs stay body-colored
     parts: list[bpy.types.Object] = []
 
-    steps = 10
+    # Thin arched headband (small beads → smooth tube after join)
+    steps = 14
     for i in range(steps + 1):
         theta = math.pi * i / steps
         x = radius * math.cos(theta)
-        z = ear_z + radius * math.sin(theta) * 0.82
+        z = ear_z + radius * math.sin(theta) * 0.98
         bpy.ops.mesh.primitive_uv_sphere_add(
-            location=Vector((x, y, z)),
-            radius=0.024,
+            location=Vector((x, y + 0.01, z)),
+            radius=0.026,
             segments=10,
             ring_count=6,
         )
@@ -638,20 +720,36 @@ def _make_headphones(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
         parts.append(bead)
 
     for sx in (1, -1):
+        # Outer cup — fat plush muff
         bpy.ops.mesh.primitive_uv_sphere_add(
             location=Vector((radius * sx, y, ear_z)),
-            radius=0.098,
-            segments=18,
-            ring_count=12,
+            radius=0.145,
+            segments=22,
+            ring_count=16,
         )
         cup = bpy.context.active_object
         cup.name = f'cup_{sx}'
-        # Thicker X (stick out past cheeks) + taller Z for unmistakable ear cups
-        cup.scale = (0.58, 1.22, 1.28)
+        # Flatten against head (X) slightly; keep round Y/Z muff silhouette
+        cup.scale = (0.55, 1.22, 1.22)
         bpy.ops.object.transform_apply(scale=True)
         assign_material(cup, acc_mat)
         shade_smooth(cup)
         parts.append(cup)
+
+        # Soft inner pad — slightly smaller / inset toward head
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            location=Vector((radius * sx * 0.88, y - 0.01, ear_z)),
+            radius=0.095,
+            segments=16,
+            ring_count=12,
+        )
+        pad = bpy.context.active_object
+        pad.name = f'pad_{sx}'
+        pad.scale = (0.50, 1.05, 1.05)
+        bpy.ops.object.transform_apply(scale=True)
+        assign_material(pad, acc_mat)
+        shade_smooth(pad)
+        parts.append(pad)
 
     bpy.ops.object.select_all(action='DESELECT')
     for p in parts:
@@ -752,12 +850,12 @@ def create_icon_meshes(
     mouth_img,
     ref_body: bpy.types.Object,
 ) -> list[bpy.types.Object]:
-    # Soft matte vinyl
-    body_mat = make_material('body', (0.97, 0.97, 0.98, 1.0), roughness=0.53)
+    # Soft vinyl toy (runtime SSS overrides dominate; keep GLB close)
+    body_mat = make_material('body', (0.97, 0.97, 0.98, 1.0), roughness=0.45)
     eye_mat = _textured_mat('eyes', eyes_img, roughness=0.40)
     mouth_mat = _textured_mat('mouth', mouth_img, roughness=0.40)
-    acc_mat = make_material('accessory', (0.12, 0.13, 0.16, 1.0), roughness=0.48, metallic=0.18)
-    cap_mat = make_material('cap_mat', (0.97, 0.97, 0.98, 1.0), roughness=0.55)
+    acc_mat = make_material('accessory', (0.12, 0.13, 0.16, 1.0), roughness=0.50, metallic=0.0)
+    cap_mat = make_material('cap_mat', (0.97, 0.97, 0.98, 1.0), roughness=0.45)
 
     body = adapt_ref_body(ref_body, body_mat)
 
@@ -792,14 +890,16 @@ def create_icon_meshes(
     )
 
     # Ink-only atlases (transparent — no white face plate / bandit mask).
-    # Bigger near-square shells so eyes+brows+mouth read cute at iso.
+    # Ref-sized cards: eyes ~0.46×0.25 (w×h), mouth ~0.27×0.17 — not tall googly plates.
     head_width = max(1e-6, max(head_xs) - min(head_xs))
-    eyes_w = min(max(head_width * 0.72, 0.46), 0.52)
-    mouth_w = min(max(head_width * 0.55, 0.34), 0.40)
+    eyes_w = min(max(head_width * 0.68, 0.44), 0.47)
+    mouth_w = min(max(head_width * 0.40, 0.26), 0.29)
     eyes_half_x = eyes_w * 0.5
-    eyes_half_z = eyes_half_x * 0.82
+    # Aspect ≈ REF 0.252/0.463 — prior 0.82 made shells ~59% taller than ref.
+    eyes_half_z = eyes_half_x * 0.545
     mouth_half_x = mouth_w * 0.5
-    mouth_half_z = mouth_half_x * 0.65
+    # Aspect ≈ REF 0.171/0.272
+    mouth_half_z = mouth_half_x * 0.630
     print(
         f'Face ink target head_w={head_width:.3f} eyes_w={eyes_w:.3f} '
         f'mouth_w={mouth_w:.3f} head_r={head_radius:.3f}'
