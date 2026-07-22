@@ -5,6 +5,7 @@ import { useCoreStore } from '../integration/store/coreStore';
 import { useActiveTeam } from '../integration/store/teamStore';
 import { getAgentBubbleContent } from '../utils/agentStatus';
 import AgentHeadBubble from './components/AgentHeadBubble';
+import Nameplate from './components/Nameplate';
 
 const InfoModal = React.lazy(() => import('./InfoModal'));
 
@@ -46,6 +47,23 @@ const UIOverlay: React.FC = () => {
 
   return (
     <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden select-none">
+      {/* Nameplates — persistent low-noise name tags, one per agent. Hidden when that
+          agent is focused, since the focused AgentHeadBubble already surfaces the name. */}
+      {npcAgents.map((agent) => {
+        const pos = npcScreenPositions[agent.index];
+        if (!pos) return null;
+        if (focusedIndex === agent.index) return null;
+
+        return (
+          <Nameplate
+            key={`nameplate-${agent.index}`}
+            name={agent.name}
+            agentColor={agent.color}
+            position={pos}
+          />
+        );
+      })}
+
       {/* Ambient status bubbles — one per agent, hidden when that agent is focused */}
       {npcAgents.map((agent) => {
         const pos = npcScreenPositions[agent.index];

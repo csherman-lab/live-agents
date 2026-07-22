@@ -1,10 +1,11 @@
 import * as THREE from 'three/webgpu';
-import { getAgentSet, getAllAgents, AgenticSystem } from '../data/agents';
+import { getAgentSet, getAllAgents, AgenticSystem, USER_COLOR } from '../data/agents';
 import { CharacterController } from './CharacterController';
 import { Engine } from './core/Engine';
 import { Stage } from './core/Stage';
 import { DriverManager } from './drivers/DriverManager';
 import { CharacterManager } from './entities/CharacterManager';
+import { HoverRing, SelectionRing } from './entities/SelectionRing';
 import { InputManager } from './input/InputManager';
 import { NavMeshManager } from './pathfinding/NavMeshManager';
 import { PoiManager } from './world/PoiManager';
@@ -15,7 +16,7 @@ import { useCoreStore } from '../integration/store/coreStore';
 import { getActiveAgentSet, useTeamStore } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
 import { AgentBehavior, ChatMessage } from '../types';
-import { BUBBLE_Y_OFFSET } from './constants';
+import { BUBBLE_Y_OFFSET, HOVER_RING_COLOR, HOVER_RING_OPACITY, PLAYER_RING_OPACITY } from './constants';
 import { toast } from '../integration/store/toastStore';
 import { friendlyApiError } from '../utils/apiErrors';
 
@@ -41,6 +42,11 @@ export class SceneManager {
   private lastAgentSetId: string | null = null;
   /** Camera follow target; kept in sync with uiStore.selectedNpcIndex (null → player). */
   private selectedIndex: number | null = null;
+  private selectionRing: SelectionRing | null = null;
+  private hoverRing: HoverRing | null = null;
+  private playerRing: HoverRing | null = null;
+  /** Avoids rebuilding the (tree-walked) agent list every frame just to read the selected agent's color. */
+  private selectedColorCache: { index: number; setId: string; color: string | undefined } | null = null;
   private inputManager: InputManager | null = null;
   private coreHandler: ((npcIndex: number, text: string) => Promise<string | null>) | null = null;
 
@@ -170,6 +176,11 @@ export class SceneManager {
         this.worldManager.getOffice() ?? undefined, (p) => this.navMesh.isPointOnNavMesh(p)
       );
 
+      this.selectionRing = new SelectionRing(this.stage.scene);
+      this.hoverRing = new HoverRing(this.stage.scene, HOVER_RING_COLOR, HOVER_RING_OPACITY);
+      this.playerRing = new HoverRing(this.stage.scene, USER_COLOR, PLAYER_RING_OPACITY);
+      this.syncFollowFromSelection(useUiStore.getState().selectedNpcIndex);
+
       this.engine.renderer.setAnimationLoop(this.animationLoop);
       document.addEventListener('visibilitychange', this.onVisibilityChange);
       this.unsubs.push(() => document.removeEventListener('visibilitychange', this.onVisibilityChange));
@@ -243,6 +254,19 @@ export class SceneManager {
         this.settleReady(err);
       }
     }
+  }
+
+  /**
+   * Selected agent's team color, cached by (index, team) so a held selection doesn't re-walk the
+   * (subagent-tree) agent list every frame just to read a color that hasn't changed.
+   */
+  private getSelectedAgentColor(index: number): string | undefined {
+    const setId = useTeamStore.getState().selectedAgentSetId;
+    const cache = this.selectedColorCache;
+    if (cache && cache.index === index && cache.setId === setId) return cache.color;
+    const color = getAllAgents(getActiveAgentSet()).find((a) => a.index === index)?.color;
+    this.selectedColorCache = { index, setId, color };
+    return color;
   }
 
   /** Map UI selection → camera follow + click pick state. Null/player → follow player. */
@@ -405,7 +429,8 @@ export class SceneManager {
 
   private animate() {
     this.engine.timer.update(); const delta = this.engine.timer.getDelta();
-    this.stage.update(); this.controller?.update(delta, this.engine.renderer);
+    this.stage.update(delta); this.controller?.update(delta, this.engine.renderer);
+    this.worldManager.update(delta);
     this.controller?.syncFromGPU(this.engine.renderer).then((pos) => {
       if (!pos || !this.controller) return;
       this.controller.updatePaths(pos); this.driverManager?.update(pos, delta);
@@ -416,7 +441,35 @@ export class SceneManager {
     const { selectedNpcIndex, setSelectedPosition, selectedPosition, isChatting } = ui;
 
     // Roam / select follow (NPC or player). Chat framing overrides look-at via setChatSubjects.
-    this.stage.setFollowTarget(this.controller?.getCPUPosition(this.selectedIndex ?? player) ?? null);
+    const followPos = this.controller?.getCPUPosition(this.selectedIndex ?? player) ?? null;
+    this.stage.setFollowTarget(followPos);
+
+    // Ground ring under selected NPC (hidden when following the player). Mutually exclusive with
+    // playerRing below by construction — both gate on `this.selectedIndex === null`, so an NPC
+    // selection and the player's self-follow ring can never render at the same feet simultaneously.
+    if (this.selectionRing) {
+      if (this.selectedIndex !== null) {
+        const color = this.getSelectedAgentColor(this.selectedIndex);
+        const ringPos = this.controller?.getCPUPosition(this.selectedIndex) ?? null;
+        this.selectionRing.update(ringPos, color, delta, this.selectedIndex);
+      } else {
+        this.selectionRing.update(null);
+      }
+    }
+
+    // Dim hover ring on a moused-over, unselected NPC (skip the player — it has its own follow ring
+    // below — and skip entirely while chatting, since orbit/hover input is a free-roam affordance).
+    if (this.hoverRing) {
+      const hoveredIdx = ui.hoveredNpcIndex;
+      const showHover = !isChatting && hoveredIdx !== null && hoveredIdx !== this.selectedIndex && hoveredIdx !== player;
+      this.hoverRing.update(showHover ? this.controller?.getCPUPosition(hoveredIdx) ?? null : null);
+    }
+
+    // Subtle non-pulsing ring under the player while the camera follows self (no NPC selected).
+    if (this.playerRing) {
+      const showPlayerRing = this.selectedIndex === null && !isChatting;
+      this.playerRing.update(showPlayerRing ? this.controller?.getCPUPosition(player) ?? null : null);
+    }
 
     // While chatting, feed both bodies so Stage can ease into a midpoint conversation shot.
     if (isChatting && this.controller && selectedNpcIndex !== null && selectedNpcIndex !== player) {
@@ -443,7 +496,7 @@ export class SceneManager {
       const p = npcScreenPositions[selectedNpcIndex];
       if (Math.abs(p.x - (selectedPosition?.x ?? 0)) > 0.5 || Math.abs(p.y - (selectedPosition?.y ?? 0)) > 0.5) setSelectedPosition(p);
     } else if (selectedPosition !== null) setSelectedPosition(null);
-    this.stage.setChatMode(isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO);
+    this.stage.setChatMode(isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO, delta);
     this.engine.render(this.stage.scene, this.stage.camera);
   }
 
@@ -471,6 +524,9 @@ export class SceneManager {
     this.stage.setFollowTarget(null);
     this.stage.setChatSubjects(null, null);
     this.stage.setChatMode(false, false);
+    this.selectionRing?.update(null);
+    this.hoverRing?.update(null);
+    this.playerRing?.update(null);
   }
 
   public dispose() {
@@ -480,6 +536,12 @@ export class SceneManager {
     }
     this.resizeObserver.disconnect();
     this.unsubs.forEach(u => u());
+    this.selectionRing?.dispose();
+    this.selectionRing = null;
+    this.hoverRing?.dispose();
+    this.hoverRing = null;
+    this.playerRing?.dispose();
+    this.playerRing = null;
     this.inputManager?.dispose();
     this.inputManager = null;
     this.driverManager?.dispose();

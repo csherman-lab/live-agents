@@ -16,6 +16,8 @@ export interface AgentNode {
   humanInTheLoop?: boolean;
   position?: { x: number; y: number };
   subagents?: AgentNode[];
+  /** Explicit character accessory ID override (specialists only — lead stays cap, user stays none). */
+  accessory?: number;
 }
 
 export type OutputType = 'text' | 'image' | 'music' | 'video';
@@ -64,7 +66,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           description: 'Architects and develops robust digital platforms and interactive experiences.',
           color: '#34A853',
           model: DEFAULT_MODELS.text,
-          position: { x: -300, y: 280 }
+          position: { x: -300, y: 280 },
+          accessory: 1 // headphones — heads-down build sessions
         },
         {
           id: 'agency-designer',
@@ -73,7 +76,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           description: 'Crafts visual identities, user interfaces, and premium brand aesthetics.',
           color: '#FBBC05',
           model: DEFAULT_MODELS.text,
-          position: { x: 0, y: 280 }
+          position: { x: 0, y: 280 },
+          accessory: 4 // glasses — visual precision
         },
         {
           id: 'agency-copywriter',
@@ -83,7 +87,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#EA4335',
           humanInTheLoop: true,
           model: DEFAULT_MODELS.text,
-          position: { x: 300, y: 280 }
+          position: { x: 300, y: 280 },
+          accessory: 3 // beanie — creative writer vibe
         }
       ]
     }
@@ -116,7 +121,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#F59E0B',
           humanInTheLoop: true,
           model: DEFAULT_MODELS.text,
-          position: { x: -150, y: 280 }
+          position: { x: -150, y: 280 },
+          accessory: 1 // headphones — mood/reference scouting
         },
         {
           id: 'lighting-stylist',
@@ -126,7 +132,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#E0E672',
           humanInTheLoop: true,
           model: DEFAULT_MODELS.text,
-          position: { x: 150, y: 280 }
+          position: { x: 150, y: 280 },
+          accessory: 4 // glasses — precise eye for light/composition
         }
       ]
     }
@@ -159,7 +166,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#74D295',
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
-          position: { x: -450, y: 280 }
+          position: { x: -450, y: 280 },
+          accessory: 3 // beanie — genre/aesthetic vibe
         },
         {
           id: 'tempo-architect',
@@ -169,7 +177,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#92D540',
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
-          position: { x: -150, y: 280 }
+          position: { x: -150, y: 280 },
+          accessory: 5 // lanyard — technical/architect precision
         },
         {
           id: 'instrumentalist',
@@ -179,7 +188,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#40D5AD',
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
-          position: { x: 150, y: 280 }
+          position: { x: 150, y: 280 },
+          accessory: 1 // headphones — plays/listens to instrumentation
         },
         {
           id: 'dynamics-engineer',
@@ -189,7 +199,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#50BB55',
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
-          position: { x: 450, y: 280 }
+          position: { x: 450, y: 280 },
+          accessory: 6 // backpack — engineer carrying gear
         }
       ]
     }
@@ -223,6 +234,7 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
           position: { x: -200, y: 280 },
+          accessory: 6, // backpack — on-location shoot gear
           subagents: [
             {
               id: 'cinematographer',
@@ -231,7 +243,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
               description: 'Defines camera work, shot composition, and subject action.',
               color: '#E643C5',
               model: DEFAULT_MODELS.text,
-              position: { x: -200, y: 430 }
+              position: { x: -200, y: 430 },
+              accessory: 4 // glasses — viewfinder-precise eye
             }
           ]
         },
@@ -244,6 +257,7 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           model: DEFAULT_MODELS.text,
           humanInTheLoop: true,
           position: { x: 200, y: 280 },
+          accessory: 5, // lanyard — production crew lead
           subagents: [
             {
               id: 'sound-designer',
@@ -252,7 +266,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
               description: 'Specifies SFX (SFX:), Ambient Noise (Ambient noise:), and Dialogue (" ").',
               color: '#50BB55',
               model: DEFAULT_MODELS.text,
-              position: { x: 200, y: 430 }
+              position: { x: 200, y: 430 },
+              accessory: 1 // headphones — mixing/monitoring audio
             }
           ]
         }
@@ -308,6 +323,7 @@ export const AGENTIC_SETS: AgenticSystem[] = [
           color: '#E6D979',
           model: DEFAULT_MODELS.text,
           position: { x: 0, y: 260 },
+          accessory: 5, // lanyard — outreach/relations professional
           subagents: [
             {
               id: 'press-writer',
@@ -316,7 +332,8 @@ export const AGENTIC_SETS: AgenticSystem[] = [
               description: 'Drafts press releases and media kits based on strategic goals.',
               color: '#5E888E',
               model: DEFAULT_MODELS.text,
-              position: { x: 0, y: 390 }
+              position: { x: 0, y: 390 },
+              accessory: 4 // glasses — drafting/reading focus
             }
           ]
         }

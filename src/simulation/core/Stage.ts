@@ -2,6 +2,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as THREE from 'three/webgpu';
 import {
   CAMERA_CHEST_Y,
+  CAMERA_DIST_DAMP,
+  CAMERA_FOLLOW_DAMP,
+  CAMERA_LIMIT_DAMP,
+  CAMERA_MAX_DELTA,
   CHAT_CAMERA_DIST,
   CHAT_CAMERA_MAX_DIST,
   CHAT_CAMERA_MIN_DIST,
@@ -31,9 +35,6 @@ export class Stage {
   private static readonly ROAM_MAX_DIST = 16;
   private static readonly ROAM_MIN_POLAR = Math.PI / 3.6; // ~50°
   private static readonly ROAM_MAX_POLAR = Math.PI / 2.5; // ~72°
-  private static readonly FRAME_LERP = 0.06;
-  private static readonly DIST_LERP = 0.05;
-  private static readonly LIMIT_LERP = 0.05;
 
   constructor(rendererElement: HTMLElement) {
     this.scene = new THREE.Scene();
@@ -94,9 +95,10 @@ export class Stage {
     // 2048 keeps soft contact shadows under desks/feet at ~¼ the shadow-pass cost of 4096
     dirLight.shadow.mapSize.set(2048, 2048);
     dirLight.shadow.bias = -0.0001;
-    dirLight.shadow.normalBias = 0.008;
-    // Wave 18: tighter contact so desk/chair silhouettes read vs floor
-    dirLight.shadow.radius = 1.75;
+    // Wave 19: trimmed normal bias closes the light gap under desk legs/feet
+    dirLight.shadow.normalBias = 0.005;
+    // Wave 19: tighter still than Wave 18 so feet/desks read grounded, but soft (not hard-edged)
+    dirLight.shadow.radius = 1.3;
     dirLight.shadow.autoUpdate = true;
     this.scene.add(dirLight);
   }
@@ -120,19 +122,31 @@ export class Stage {
     this.chatNpc = npc ? npc.clone() : null;
   }
 
-  public update() {
+  /**
+   * Exponential-decay damping factor for use with `lerp(target, factor)`,
+   * scaled by elapsed time so easing speed is frame-rate independent
+   * (same feel at 30fps and 144fps). `rate` is roughly "how many times per
+   * second the gap closes"; higher = snappier catch-up.
+   */
+  private static dampFactor(rate: number, dt: number): number {
+    return 1 - Math.exp(-rate * dt);
+  }
+
+  /** @param delta Seconds since last frame (clamped internally against stalls/tab-switches). */
+  public update(delta = 1 / 60) {
+    const dt = Math.min(Math.max(delta, 0), CAMERA_MAX_DELTA);
     if (this.isChatting) {
-      this.updateChatFraming();
+      this.updateChatFraming(dt);
     } else {
       const lerpTarget = this.followTarget
         ? this._lookAt.set(this.followTarget.x, CAMERA_CHEST_Y, this.followTarget.z)
         : this.defaultTarget;
-      this.controls.target.lerp(lerpTarget, Stage.FRAME_LERP);
+      this.controls.target.lerp(lerpTarget, Stage.dampFactor(CAMERA_FOLLOW_DAMP, dt));
     }
     this.controls.update();
   }
 
-  private updateChatFraming(): void {
+  private updateChatFraming(dt: number): void {
     // Prefer player+NPC midpoint; fall back to selected NPC chest, then follow.
     if (this.chatPlayer && this.chatNpc) {
       this._lookAt.set(
@@ -148,18 +162,22 @@ export class Stage {
       this._lookAt.copy(this.defaultTarget);
     }
 
-    this.controls.target.lerp(this._lookAt, Stage.FRAME_LERP);
-    this.easeCameraDistance(CHAT_CAMERA_DIST);
+    this.controls.target.lerp(this._lookAt, Stage.dampFactor(CAMERA_FOLLOW_DAMP, dt));
+    this.easeCameraDistance(CHAT_CAMERA_DIST, dt);
   }
 
   /** Ease orbit radius toward ideal while keeping azimuth + iso-friendly polar. */
-  private easeCameraDistance(ideal: number): void {
+  private easeCameraDistance(ideal: number, dt: number): void {
     this._offset.copy(this.camera.position).sub(this.controls.target);
     const dist = this._offset.length();
     if (dist < 1e-4) return;
 
     this._spherical.setFromVector3(this._offset);
-    this._spherical.radius = THREE.MathUtils.lerp(dist, ideal, Stage.DIST_LERP);
+    this._spherical.radius = THREE.MathUtils.lerp(
+      dist,
+      ideal,
+      Stage.dampFactor(CAMERA_DIST_DAMP, dt),
+    );
     this._spherical.phi = THREE.MathUtils.clamp(
       this._spherical.phi,
       Stage.ROAM_MIN_POLAR,
@@ -175,12 +193,15 @@ export class Stage {
    *
    * @param isChatting  True while a conversation is active.
    * @param playerMoving True while player is walking toward the NPC (GOTO state).
+   * @param delta Seconds since last frame — drives frame-rate-independent limit easing.
    */
-  public setChatMode(isChatting: boolean, playerMoving: boolean): void {
+  public setChatMode(isChatting: boolean, playerMoving: boolean, delta = 1 / 60): void {
     if (!this.controls) return;
 
     this.isChatting = isChatting;
     this.playerMoving = playerMoving;
+    const dt = Math.min(Math.max(delta, 0), CAMERA_MAX_DELTA);
+    const limitFactor = Stage.dampFactor(CAMERA_LIMIT_DAMP, dt);
 
     if (isChatting) {
       if (playerMoving) {
@@ -192,22 +213,22 @@ export class Stage {
       this.controls.minDistance = THREE.MathUtils.lerp(
         this.controls.minDistance,
         CHAT_CAMERA_MIN_DIST,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.maxDistance = THREE.MathUtils.lerp(
         this.controls.maxDistance,
         CHAT_CAMERA_MAX_DIST,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.minPolarAngle = THREE.MathUtils.lerp(
         this.controls.minPolarAngle,
         Stage.ROAM_MIN_POLAR,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.maxPolarAngle = THREE.MathUtils.lerp(
         this.controls.maxPolarAngle,
         Stage.ROAM_MAX_POLAR,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
     } else {
       // Free roam — restore office overview zoom envelope.
@@ -215,22 +236,22 @@ export class Stage {
       this.controls.minDistance = THREE.MathUtils.lerp(
         this.controls.minDistance,
         Stage.ROAM_MIN_DIST,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.maxDistance = THREE.MathUtils.lerp(
         this.controls.maxDistance,
         Stage.ROAM_MAX_DIST,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.minPolarAngle = THREE.MathUtils.lerp(
         this.controls.minPolarAngle,
         Stage.ROAM_MIN_POLAR,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
       this.controls.maxPolarAngle = THREE.MathUtils.lerp(
         this.controls.maxPolarAngle,
         Stage.ROAM_MAX_POLAR,
-        Stage.LIMIT_LERP,
+        limitFactor,
       );
     }
   }

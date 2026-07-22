@@ -6,7 +6,11 @@ import { AgentStateBuffer } from './behavior/AgentStateBuffer';
 import { CharacterStateMachine } from './behavior/CharacterStateMachine';
 import {
   AGENT_ARRIVAL_EASE_DIST,
+  AGENT_AVOIDANCE_CROSS_DOT,
+  AGENT_AVOIDANCE_RADIUS,
+  AGENT_AVOIDANCE_STRENGTH,
   AGENT_CRUISE_SPEED,
+  AGENT_CRUISE_VARIANCE,
   AGENT_SEGMENT_EASE_DIST,
   AGENT_SEGMENT_MIN_SPEED_SCALE,
   AGENT_SEPARATION_GOTO_WEIGHT,
@@ -77,6 +81,8 @@ export class CharacterController implements ICharacterDriver {
   private separationScratch: Float32Array;
   /** Per-agent smoothed walk facing (XZ unit); Wave 12 yaw blend. */
   private walkFacing: Float32Array;
+  /** Per-agent deterministic cruise-speed multiplier (Wave 2 motion deepen — ±AGENT_CRUISE_VARIANCE). */
+  private cruiseSpeedMult: Float32Array;
   private readonly _sepPos = new THREE.Vector3();
   private readonly _sitPos = new THREE.Vector3();
   private readonly _sitForward = new THREE.Vector3();
@@ -91,6 +97,7 @@ export class CharacterController implements ICharacterDriver {
     this.stateMachine = new CharacterStateMachine(count);
     this.separationScratch = new Float32Array(count * 2);
     this.walkFacing = new Float32Array(count * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(count);
     this.sitIntents = new Array(count).fill(null);
     this.sitMotions = new Array(count).fill(null);
 
@@ -106,6 +113,22 @@ export class CharacterController implements ICharacterDriver {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __laController?: CharacterController }).__laController = this;
     }
+  }
+
+  /**
+   * Deterministic ±AGENT_CRUISE_VARIANCE cruise-speed multiplier per agent index
+   * (Wave 2 motion deepen). Pure function of index — no Math.random — so the
+   * same roster paces identically across reloads; avoids a simple even/odd
+   * pattern reading as robotic in a crowd.
+   */
+  private static buildCruiseSpeedMult(count: number): Float32Array {
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const h = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+      const frac = h - Math.floor(h); // [0, 1)
+      out[i] = 1 + AGENT_CRUISE_VARIANCE * (frac * 2 - 1); // → [1 - var, 1 + var]
+    }
+    return out;
   }
 
   // ── High-level character API ─────────────────────────────────
@@ -378,6 +401,68 @@ export class CharacterController implements ICharacterDriver {
   }
 
   /**
+   * Anticipatory local avoidance (Wave 4) — nudges a pathing agent's desired
+   * direction sideways *before* it's fed to blendWalkFacing, so approaching or
+   * crossing walkers start curving apart early instead of only untangling once
+   * applySeparation (the safety net) finds them overlapping.
+   *
+   * Not RVO: a deterministic side-step bias per conflicting mover, scaled by
+   * closeness and reusing the mover's smoothed walkFacing as its travel
+   * direction. Mutates `desired` in place and renormalizes it.
+   */
+  private applyAvoidanceSteer(
+    index: number,
+    currentPos: THREE.Vector3,
+    desired: THREE.Vector3,
+    positions: Float32Array,
+  ): void {
+    const count = this.pathAgents.length;
+    const r2 = AGENT_AVOIDANCE_RADIUS * AGENT_AVOIDANCE_RADIUS;
+    let steerX = 0;
+    let steerZ = 0;
+
+    for (let j = 0; j < count; j++) {
+      if (j === index || !this.pathAgents[j].isMoving) continue;
+
+      const dx = positions[j * 4] - currentPos.x;
+      const dz = positions[j * 4 + 2] - currentPos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= r2 || d2 < 1e-6) continue;
+
+      // Only react to movers roughly ahead of us on our current heading —
+      // someone already behind/passed isn't a collision risk.
+      const dist = Math.sqrt(d2);
+      const aheadDot = (dx * desired.x + dz * desired.z) / dist;
+      if (aheadDot <= 0) continue;
+
+      // Other mover's travel direction (smoothed walk facing is a stable proxy).
+      const ofx = this.walkFacing[j * 2];
+      const ofz = this.walkFacing[j * 2 + 1];
+      const headingDot = desired.x * ofx + desired.z * ofz;
+      if (headingDot > AGENT_AVOIDANCE_CROSS_DOT) continue; // walking mostly the same way — no conflict
+
+      // Side-pick via cross product: which side of our heading the other mover
+      // is on, so we always curve away from them (not toward).
+      const rightAmount = dx * desired.z - dz * desired.x; // >0 → other is to our right
+      const side = rightAmount > 0 ? -1 : 1;
+      const falloff = 1 - dist / AGENT_AVOIDANCE_RADIUS;
+      // Perpendicular-right of desired, scaled to the side away from the conflict.
+      steerX += desired.z * side * falloff;
+      steerZ += -desired.x * side * falloff;
+    }
+
+    if (steerX === 0 && steerZ === 0) return;
+
+    desired.x += steerX * AGENT_AVOIDANCE_STRENGTH;
+    desired.z += steerZ * AGENT_AVOIDANCE_STRENGTH;
+    const len = Math.hypot(desired.x, desired.z);
+    if (len > 1e-5) {
+      desired.x /= len;
+      desired.z /= len;
+    }
+  }
+
+  /**
    * Ease scale for the active segment + final arrival (smoothstep in/out).
    * Cruise stays AGENT_CRUISE_SPEED at mid-segment.
    */
@@ -612,6 +697,7 @@ export class CharacterController implements ICharacterDriver {
       const distToNode = Math.hypot(toX, toZ);
 
       const desired = agent.getDesiredDirection(currentPos);
+      this.applyAvoidanceSteer(i, currentPos, desired, positions);
       const align = this.blendWalkFacing(i, desired.x, desired.z, dt);
       const fx = this.walkFacing[i * 2];
       const fz = this.walkFacing[i * 2 + 1];
@@ -619,7 +705,7 @@ export class CharacterController implements ICharacterDriver {
       // Ease along segment / destination; slow while yawing hard.
       const easeScale = this.computeSpeedScale(agent, currentPos, distToNode);
       const turnScale = THREE.MathUtils.lerp(AGENT_TURN_SPEED_FACTOR, 1, align);
-      const speed = AGENT_CRUISE_SPEED * easeScale * turnScale;
+      const speed = AGENT_CRUISE_SPEED * this.cruiseSpeedMult[i] * easeScale * turnScale;
       const step = Math.min(distToNode, speed * dt);
 
       // Move along facing (deliberate arcs) but don't overshoot the node.
@@ -850,6 +936,7 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents = [];
     this.separationScratch = new Float32Array(newCount * 2);
     this.walkFacing = new Float32Array(newCount * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
     this.arrivalCallbacks = [];
@@ -869,6 +956,7 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents = [];
     this.separationScratch = new Float32Array(newCount * 2);
     this.walkFacing = new Float32Array(newCount * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
     this.arrivalCallbacks = [];
