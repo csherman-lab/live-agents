@@ -41,28 +41,22 @@ export const NAVMESH_ZONE = 'level';
  * Locomotion (GPU units / compute dispatch; ~frame at 60 Hz).
  *
  * Measured Walk (ref HEAD character.glb):
- *   duration 0.333s (8 frames @ 24fps) → ~6 steps/s
- *   leg swing ~68–82°, foot-tip Z amplitude ≈ 0.23
- *   theoretical matched speed ≈ stride/dur ≈ 0.68 u/s
- *     → ≈ 0.0114 / frame @ 60fps
+ *   duration ~0.333s → theoretical matched speed ≈ 0.68 u/s
  *
- * Live Walk matches ref (leg travel L=0.115 / R=0.158, 9 keys / 0.333s).
- * Retarget ≈ 0.52× theoretical stride speed:
- *   SPEED 0.0050 × GOTO 1.18 ≈ 0.0059 / frame ≈ 0.35 u/s @ 60fps.
+ * Live cruise targets a normal walk (~0.58 u/s), not the old calm ~0.32 crawl.
  */
-export const AGENT_MOVE_SPEED = 0.0050;
+export const AGENT_MOVE_SPEED = 0.0082;
 /** Multiplier applied while following nav waypoints. */
 export const AGENT_MOVE_GOTO_MULT = 1.18;
 /** Distance at which a GOTO waypoint is considered reached on GPU. */
 export const AGENT_WAYPOINT_RADIUS = 0.15;
 
 /**
- * Watch locomotion (Wave 12) — CPU path follow with ease + turn blend.
- * Cruise matches GPU seek: SPEED × GOTO_MULT × 60fps ≈ 0.354 u/s.
+ * Watch locomotion — CPU path follow with ease + turn blend.
+ * Cruise ≈ SPEED × GOTO_MULT × 60fps ≈ 0.58 u/s.
  */
 export const AGENT_CRUISE_SPEED =
-  // Motion polish: ~10% under matched-stride speed — calmer pace, less foot skate on turns/arrival.
-  AGENT_MOVE_SPEED * AGENT_MOVE_GOTO_MULT * 60 * 0.9;
+  AGENT_MOVE_SPEED * AGENT_MOVE_GOTO_MULT * 60;
 /**
  * Wave 2 motion deepen: deterministic per-agent cruise pace variance (± this
  * fraction of AGENT_CRUISE_SPEED), keyed off agent index — not randomized per
@@ -78,26 +72,21 @@ export const AGENT_SEGMENT_MIN_SPEED_SCALE = 0.42;
 export const AGENT_ARRIVAL_EASE_DIST = 0.85;
 /**
  * Radians/sec yaw limit while walking (smooth, no snap).
- * Wave 3 retune: 7.5 → 8.2 (~+9%). Faces catch up to the desired direction a
- * touch faster, shortening the low-alignment window where CharacterController's
- * corner pull-blend nudges position toward the next node ahead of full turn
- * completion — the main residual source of visible foot-skate on sharp corners.
+ * Faster catch-up at the new ~0.58 u/s cruise so corners don't skate.
  */
-export const AGENT_TURN_RATE = 8.2;
+export const AGENT_TURN_RATE = 9.5;
 /**
  * While turning hard, slow a bit so feet don't skate sideways.
- * Wave 3 retune: 0.48 → 0.42 — paired with the AGENT_TURN_RATE bump above,
- * this trims a bit more speed during the (now shorter) misaligned window
- * rather than making corners feel sluggish outright.
+ * Slightly stronger slowdown paired with AGENT_TURN_RATE bump.
  */
-export const AGENT_TURN_SPEED_FACTOR = 0.42;
+export const AGENT_TURN_SPEED_FACTOR = 0.36;
 
 // ── Locomotion presence (Wave 1 — gait + stride sync) ─────────
 /**
  * Approximate world-units traveled per full Walk clip cycle at rate 1.
- * Tuned so computeWalkPlaybackRate keeps feet near contact at AGENT_CRUISE_SPEED.
+ * Tuned for ~0.58 u/s cruise × ~0.333s Walk ≈ one stride per cycle at rate≈1.
  */
-export const WALK_STRIDE_LENGTH = 0.42;
+export const WALK_STRIDE_LENGTH = 0.20;
 /** Seconds of continuous pathing before switching idle → walk. */
 export const GAIT_COMMIT_TIME = 0.08;
 /** Seconds after path end before switching walk → idle. */
@@ -113,15 +102,15 @@ export const HOVER_REACTION_MIN_MS = 450;
 export const HOVER_REACTION_CHANCE = 0.35;
 export const HOVER_REACTION_COOLDOWN_MS = 8000;
 /** Ambient NPC↔NPC chat cadence. */
-export const SOCIAL_AMBIENT_INTERVAL = 12;
+export const SOCIAL_AMBIENT_INTERVAL = 8;
 export const SOCIAL_AMBIENT_DURATION = 6;
 /** Max distance to start an ambient meetup (agents walk together if farther than chat distance). */
-export const SOCIAL_AMBIENT_MEETUP_RADIUS = 8;
+export const SOCIAL_AMBIENT_MEETUP_RADIUS = 10;
 /** Stand-off once ambient pair has walked together. */
 export const SOCIAL_AMBIENT_PAIR_RADIUS = 2.2;
-export const SOCIAL_NOTICE_RADIUS = 1.8;
-export const SOCIAL_NOTICE_CHANCE = 0.2;
-export const SOCIAL_NOTICE_COOLDOWN = 18;
+export const SOCIAL_NOTICE_RADIUS = 2.0;
+export const SOCIAL_NOTICE_CHANCE = 0.28;
+export const SOCIAL_NOTICE_COOLDOWN = 14;
 /** Listener micro-beat interval while someone else talks (seconds). */
 export const LISTENER_MICROBEAT_INTERVAL = 3.5;
 /** Turn rate for conversation facing ease (rad/s). */
@@ -220,13 +209,13 @@ export const PARTITION_PUSH_BOXES: ReadonlyArray<{
  *   2) ease position/facing into the exact seat pose
  */
 /** XZ distance to the near-seat nav waypoint where CPU slowdown begins. */
-export const SIT_APPROACH_SLOW_DIST = 1.25;
-/** Base world units/sec during the last-meters slowdown (GPU walk ≈ 0.35 u/s). */
-export const SIT_APPROACH_SPEED = 0.28;
+export const SIT_APPROACH_SLOW_DIST = 1.45;
+/** Base world units/sec during the last-meters slowdown (keeps pace with ~0.58 walk). */
+export const SIT_APPROACH_SPEED = 0.52;
 /** Speed scale at the waypoint (1 → this) as distance falls to 0. */
-export const SIT_APPROACH_MIN_SPEED_SCALE = 0.35;
-/** Seconds to ease from approach end into exact seat position/facing. Motion polish: longer so sit doesn't snap. */
-export const SIT_ARRIVAL_BLEND_DURATION = 0.36;
+export const SIT_APPROACH_MIN_SPEED_SCALE = 0.38;
+/** Seconds to ease from approach end into exact seat position/facing. */
+export const SIT_ARRIVAL_BLEND_DURATION = 0.42;
 /** Ease-out power for the seat-pose blend (1 = linear, 2 = quadratic out). */
 export const SIT_ARRIVAL_BLEND_EASE = 2;
 

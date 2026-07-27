@@ -776,13 +776,16 @@ export class CharacterController implements ICharacterDriver {
         currentPos.z + fz * step,
       );
       // If facing hasn't caught up, still progress toward the node a little
-      // so agents don't stall on sharp corners.
-      if (align < 0.35 && distToNode > PATH_NODE_ARRIVAL) {
-        const pull = step * 0.35;
+      // so agents don't stall on sharp corners — keep pull small to avoid desk cuts / skate.
+      if (align < 0.28 && distToNode > PATH_NODE_ARRIVAL) {
+        const pull = step * 0.22;
         const inv = 1 / distToNode;
-        this._movePos.x = currentPos.x + fx * step * 0.65 + toX * inv * pull;
-        this._movePos.z = currentPos.z + fz * step * 0.65 + toZ * inv * pull;
+        this._movePos.x = currentPos.x + fx * step * 0.78 + toX * inv * pull;
+        this._movePos.z = currentPos.z + fz * step * 0.78 + toZ * inv * pull;
       }
+
+      // Stay on walkable navmesh — no cutting through desks/furniture holes.
+      this.navMesh.clampMove(currentPos, this._movePos);
 
       this.characterManager.setPositionAndZeroVelocity(i, this._movePos);
       this.characterManager.setFacing(i, fx, fz);
@@ -839,9 +842,12 @@ export class CharacterController implements ICharacterDriver {
 
       if (!pushed) continue;
       this._sepPos.set(x, positions[i * 4 + 1], z);
+      // Keep partition push on-mesh too.
+      const from = this._movePos.set(positions[i * 4], positions[i * 4 + 1], positions[i * 4 + 2]);
+      this.navMesh.clampMove(from, this._sepPos);
       this.characterManager.setPosition(i, this._sepPos);
-      positions[i * 4] = x;
-      positions[i * 4 + 2] = z;
+      positions[i * 4] = this._sepPos.x;
+      positions[i * 4 + 2] = this._sepPos.z;
     }
   }
 
@@ -925,7 +931,12 @@ export class CharacterController implements ICharacterDriver {
         positions[i * 4 + 1],
         positions[i * 4 + 2] + oz,
       );
+      // Don't let soft push shove agents into desk holes.
+      const from = this._movePos.set(positions[i * 4], positions[i * 4 + 1], positions[i * 4 + 2]);
+      this.navMesh.clampMove(from, this._sepPos);
       this.characterManager.setPosition(i, this._sepPos);
+      positions[i * 4] = this._sepPos.x;
+      positions[i * 4 + 2] = this._sepPos.z;
     }
   }
 

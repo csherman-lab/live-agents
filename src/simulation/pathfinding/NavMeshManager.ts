@@ -12,6 +12,7 @@ import { NAVMESH_ZONE } from '../constants';
 export class NavMeshManager {
   private pf = new Pathfinding();
   private ready = false;
+  private readonly _clampOut = new THREE.Vector3();
 
   // ── Setup ────────────────────────────────────────────────────
 
@@ -51,9 +52,53 @@ export class NavMeshManager {
     return this.ready;
   }
 
-  /** Checks if a point is within the navmesh boundaries. */
+  /** Checks if a point lies on a walkable nav polygon (not just near a group). */
   public isPointOnNavMesh(point: THREE.Vector3): boolean {
     if (!this.ready) return false;
-    return this.pf.getGroup(NAVMESH_ZONE, point as any) !== null;
+    // getGroup(zone, point) alone returns the nearest group by centroid even for
+    // points inside desk holes — use getClosestNode(..., checkPolygon=true).
+    const groupID = this.pf.getGroup(NAVMESH_ZONE, point as any);
+    if (groupID === null) return false;
+    const node = this.pf.getClosestNode(point as any, NAVMESH_ZONE, groupID, true);
+    return node !== null;
+  }
+
+  /**
+   * Clamp a proposed step so it cannot leave the walkable mesh
+   * (stops cutting through desks / furniture holes).
+   * Mutates `proposed` in place when clamping; returns whether a clamp ran.
+   */
+  public clampMove(from: THREE.Vector3, proposed: THREE.Vector3): boolean {
+    if (!this.ready) return false;
+
+    const groupID = this.pf.getGroup(NAVMESH_ZONE, from as any);
+    if (groupID === null) return false;
+
+    // Still on mesh and target also on mesh — no clamp needed.
+    if (this.isPointOnNavMesh(proposed)) return false;
+
+    const node =
+      this.pf.getClosestNode(from as any, NAVMESH_ZONE, groupID, true) ??
+      this.pf.getClosestNode(from as any, NAVMESH_ZONE, groupID, false);
+    if (!node) return false;
+
+    this.pf.clampStep(from as any, proposed as any, node, NAVMESH_ZONE, groupID, this._clampOut as any);
+    proposed.set(this._clampOut.x, from.y, this._clampOut.z);
+    return true;
+  }
+
+  /**
+   * If `point` is off-mesh, snap it to the closest point on the navmesh.
+   * Returns true when the point was adjusted.
+   */
+  public projectOntoNavMesh(point: THREE.Vector3): boolean {
+    if (!this.ready || this.isPointOnNavMesh(point)) return false;
+    const groupID = this.pf.getGroup(NAVMESH_ZONE, point as any);
+    if (groupID === null) return false;
+    const node = this.pf.getClosestNode(point as any, NAVMESH_ZONE, groupID, false);
+    if (!node) return false;
+    this.pf.clampStep(point as any, point as any, node, NAVMESH_ZONE, groupID, this._clampOut as any);
+    point.set(this._clampOut.x, point.y, this._clampOut.z);
+    return true;
   }
 }
