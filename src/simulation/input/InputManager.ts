@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 
 import { PoiDef } from '../../types';
-import { CHARACTER_Y_OFFSET, PICK_RADIUS, POI_PICK_RADIUS } from '../constants';
+import { CHARACTER_Y_OFFSET, DOUBLE_CLICK_MS, PICK_RADIUS, POI_PICK_RADIUS } from '../constants';
+import { isDoubleClick } from '../presence/InteractionPresence';
 
 const DRAG_THRESHOLD_PX = 4;
 const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y=0
@@ -15,6 +16,8 @@ export class InputManager {
   private dragStartX = 0;
   private dragStartY = 0;
   private isDragging = false;
+  private lastAgentClickAt: number | null = null;
+  private lastAgentClickIndex: number | null = null;
 
   public selectedIndex: number | null = null;
 
@@ -31,6 +34,10 @@ export class InputManager {
     private onPoiClick: (id: string) => void,
     private raycastObject?: THREE.Object3D,
     private isPointValid?: (point: THREE.Vector3) => boolean,
+    /** Double-click an NPC to start chat. */
+    private onDoubleSelect?: (index: number) => void,
+    /** When false, floor clicks are ignored (e.g. while chatting). */
+    private canFloorClick?: () => boolean,
   ) {
 
     this.boundPointerDown = this.handlePointerDown.bind(this);
@@ -197,16 +204,31 @@ export class InputManager {
     const closestIdx = this.getAgentAtPointer();
 
     if (closestIdx !== null) {
-      if (closestIdx === this.selectedIndex) {
-        // Click on already-selected character → deselect
-        this.selectedIndex = null;
-        this.onSelect(null);
-      } else {
-        // Click on a new character (NPC or Player) → select it
+      const now = performance.now();
+      if (
+        this.onDoubleSelect &&
+        closestIdx === this.lastAgentClickIndex &&
+        isDoubleClick(now, this.lastAgentClickAt, DOUBLE_CLICK_MS)
+      ) {
+        this.lastAgentClickAt = null;
+        this.lastAgentClickIndex = null;
+        this.selectedIndex = closestIdx;
+        this.onSelect(closestIdx);
+        this.onDoubleSelect(closestIdx);
+        return;
+      }
+
+      this.lastAgentClickAt = now;
+      this.lastAgentClickIndex = closestIdx;
+
+      // Single click selects (re-click keeps selection — double-click opens chat).
+      if (closestIdx !== this.selectedIndex) {
         this.selectedIndex = closestIdx;
         this.onSelect(closestIdx);
       }
     } else {
+      this.lastAgentClickAt = null;
+      this.lastAgentClickIndex = null;
       // Click missed all characters, check POIs
       const hoveredPoi = this.getPoiAtPointer();
 
@@ -218,8 +240,8 @@ export class InputManager {
         // If something was selected, deselect it first
         this.selectedIndex = null;
         this.onSelect(null);
-      } else {
-        // If nothing was selected, move the player
+      } else if (this.canFloorClick?.() !== false) {
+        // If nothing was selected, move the player (blocked while chatting)
         const target = this.getWorldClickPosition();
         if (target) {
           this.onWaypoint(target.x, target.z);

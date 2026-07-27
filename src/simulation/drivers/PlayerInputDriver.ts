@@ -38,15 +38,15 @@ export class PlayerInputDriver implements IAgentDriver {
   /**
    * Walk the player toward a specific world position with a custom arrival state.
    * Used by SceneManager when the player initiates a chat with an NPC.
+   * @returns false if pathfinding failed
    */
   public walkTo(
     target: THREE.Vector3,
     arrivalState: import('../../types').CharacterStateKey = 'idle',
     onArrival?: (index: number) => void,
-  ): void {
+  ): boolean {
     const from = this._getCurrentPos();
-    this.controller.moveTo(this.agentIndex, target, arrivalState, onArrival, from);
-
+    return this.controller.moveTo(this.agentIndex, target, arrivalState, onArrival, from);
   }
 
   private _getCurrentPos(): THREE.Vector3 | undefined {

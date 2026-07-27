@@ -6,7 +6,11 @@ import { AgentStateBuffer } from './behavior/AgentStateBuffer';
 import { CharacterStateMachine } from './behavior/CharacterStateMachine';
 import {
   AGENT_ARRIVAL_EASE_DIST,
+  AGENT_AVOIDANCE_CROSS_DOT,
+  AGENT_AVOIDANCE_RADIUS,
+  AGENT_AVOIDANCE_STRENGTH,
   AGENT_CRUISE_SPEED,
+  AGENT_CRUISE_VARIANCE,
   AGENT_SEGMENT_EASE_DIST,
   AGENT_SEGMENT_MIN_SPEED_SCALE,
   AGENT_SEPARATION_GOTO_WEIGHT,
@@ -14,6 +18,8 @@ import {
   AGENT_SEPARATION_RADIUS,
   AGENT_TURN_RATE,
   AGENT_TURN_SPEED_FACTOR,
+  GAIT_COMMIT_TIME,
+  GAIT_SETTLE_TIME,
   PARTITION_PUSH_BOXES,
   PATH_NODE_ARRIVAL,
   SIT_APPROACH_MIN_SPEED_SCALE,
@@ -21,10 +27,12 @@ import {
   SIT_APPROACH_SPEED,
   SIT_ARRIVAL_BLEND_DURATION,
   SIT_ARRIVAL_BLEND_EASE,
+  WALK_STRIDE_LENGTH,
 } from './constants';
 import { CharacterManager } from './entities/CharacterManager';
 import { NavMeshManager } from './pathfinding/NavMeshManager';
 import { PathAgent } from './pathfinding/PathAgent';
+import { GaitGate, computeWalkPlaybackRate } from './presence/LocomotionPresence';
 import { PoiManager } from './world/PoiManager';
 
 /** Pending sit walk — navmesh still owns path until the slow-approach radius. */
@@ -77,6 +85,10 @@ export class CharacterController implements ICharacterDriver {
   private separationScratch: Float32Array;
   /** Per-agent smoothed walk facing (XZ unit); Wave 12 yaw blend. */
   private walkFacing: Float32Array;
+  /** Per-agent deterministic cruise-speed multiplier (Wave 2 motion deepen — ±AGENT_CRUISE_VARIANCE). */
+  private cruiseSpeedMult: Float32Array;
+  /** Per-agent walk start/stop gate (Wave 1 locomotion presence). */
+  private gaitGates: GaitGate[] = [];
   private readonly _sepPos = new THREE.Vector3();
   private readonly _sitPos = new THREE.Vector3();
   private readonly _sitForward = new THREE.Vector3();
@@ -91,8 +103,10 @@ export class CharacterController implements ICharacterDriver {
     this.stateMachine = new CharacterStateMachine(count);
     this.separationScratch = new Float32Array(count * 2);
     this.walkFacing = new Float32Array(count * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(count);
     this.sitIntents = new Array(count).fill(null);
     this.sitMotions = new Array(count).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(count);
 
     const stateBuffer = characterManager.getAgentStateBuffer()!;
     for (let i = 0; i < count; i++) {
@@ -105,6 +119,63 @@ export class CharacterController implements ICharacterDriver {
     // Dev QA probe for Wave 12 locomotion (ease / yaw samples).
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __laController?: CharacterController }).__laController = this;
+    }
+  }
+
+  /**
+   * Deterministic ±AGENT_CRUISE_VARIANCE cruise-speed multiplier per agent index
+   * (Wave 2 motion deepen). Pure function of index — no Math.random — so the
+   * same roster paces identically across reloads; avoids a simple even/odd
+   * pattern reading as robotic in a crowd.
+   */
+  private static buildCruiseSpeedMult(count: number): Float32Array {
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const h = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+      const frac = h - Math.floor(h); // [0, 1)
+      out[i] = 1 + AGENT_CRUISE_VARIANCE * (frac * 2 - 1); // → [1 - var, 1 + var]
+    }
+    return out;
+  }
+
+  private static buildGaitGates(count: number): GaitGate[] {
+    const gates: GaitGate[] = [];
+    for (let i = 0; i < count; i++) {
+      gates.push(new GaitGate({ commitTime: GAIT_COMMIT_TIME, settleTime: GAIT_SETTLE_TIME }));
+    }
+    return gates;
+  }
+
+  private applyWalkPlaybackRate(index: number): void {
+    const duration = this.getAnimationDuration(AnimationName.WALK);
+    const cruise = AGENT_CRUISE_SPEED * (this.cruiseSpeedMult[index] ?? 1);
+    const rate = computeWalkPlaybackRate(cruise, WALK_STRIDE_LENGTH, duration);
+    this.characterManager.setAnimationRate(index, rate);
+  }
+
+  /** Tick gait gates — delayed walk enter / idle exit around pathing. */
+  private tickGaitGates(delta: number): void {
+    const dt = Math.min(Math.max(delta, 0), 0.1);
+    for (let i = 0; i < this.gaitGates.length; i++) {
+      const soft = this.sitMotions[i];
+      // Seat-pose blend is seated, not locomotion — reset so settle doesn't force idle over sit_down.
+      if (soft?.phase === 'blend') {
+        this.gaitGates[i].reset();
+        continue;
+      }
+      const isLocomoting = this.pathAgents[i].isMoving || soft?.phase === 'slow';
+      const action = this.gaitGates[i].update(dt, !!isLocomoting);
+      if (action === 'walk') {
+        const cur = this.stateMachine.getState(i);
+        if (cur === 'idle' || cur === 'look_around' || cur === 'walk' || cur === 'wave') {
+          this.stateMachine.transition(i, 'walk', this);
+          this.applyWalkPlaybackRate(i);
+        }
+      } else if (action === 'idle') {
+        if (this.stateMachine.getState(i) === 'walk') {
+          this.stateMachine.transition(i, 'idle', this);
+        }
+      }
     }
   }
 
@@ -125,7 +196,17 @@ export class CharacterController implements ICharacterDriver {
       this.poiManager.releaseAll(index);
     }
 
+    // Explicit pose/chat/sit owns the body — cancel pending gait settle so it
+    // can't stomp listen/talk with a delayed idle.
+    if (state !== 'walk') {
+      this.gaitGates[index]?.reset();
+    }
+
     this.stateMachine.transition(index, state, this);
+
+    if (state === 'walk') {
+      this.applyWalkPlaybackRate(index);
+    }
   }
 
   /**
@@ -199,7 +280,8 @@ export class CharacterController implements ICharacterDriver {
     // IDLE physics: CPU owns eased seek + yaw (shared waypoint/facing slots).
     // Mode stays semantically "pathing" via PathAgent.isMoving for separation.
     this.setPhysicsMode(index, AgentBehavior.IDLE);
-    this.play(index, 'walk');
+    // GaitGate enters walk after a short commit — avoids idle→walk pop mid-step.
+    this.gaitGates[index]?.onPathStart();
 
     return true;
   }
@@ -299,7 +381,7 @@ export class CharacterController implements ICharacterDriver {
     };
 
     this.setPhysicsMode(index, AgentBehavior.IDLE);
-    this.play(index, 'walk');
+    this.gaitGates[index]?.onPathStart();
 
     this.poiManager.releaseAll(index);
     this.poiManager.occupy(poi.id, index);
@@ -375,6 +457,68 @@ export class CharacterController implements ICharacterDriver {
     }
 
     return (dot + 1) * 0.5;
+  }
+
+  /**
+   * Anticipatory local avoidance (Wave 4) — nudges a pathing agent's desired
+   * direction sideways *before* it's fed to blendWalkFacing, so approaching or
+   * crossing walkers start curving apart early instead of only untangling once
+   * applySeparation (the safety net) finds them overlapping.
+   *
+   * Not RVO: a deterministic side-step bias per conflicting mover, scaled by
+   * closeness and reusing the mover's smoothed walkFacing as its travel
+   * direction. Mutates `desired` in place and renormalizes it.
+   */
+  private applyAvoidanceSteer(
+    index: number,
+    currentPos: THREE.Vector3,
+    desired: THREE.Vector3,
+    positions: Float32Array,
+  ): void {
+    const count = this.pathAgents.length;
+    const r2 = AGENT_AVOIDANCE_RADIUS * AGENT_AVOIDANCE_RADIUS;
+    let steerX = 0;
+    let steerZ = 0;
+
+    for (let j = 0; j < count; j++) {
+      if (j === index || !this.pathAgents[j].isMoving) continue;
+
+      const dx = positions[j * 4] - currentPos.x;
+      const dz = positions[j * 4 + 2] - currentPos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= r2 || d2 < 1e-6) continue;
+
+      // Only react to movers roughly ahead of us on our current heading —
+      // someone already behind/passed isn't a collision risk.
+      const dist = Math.sqrt(d2);
+      const aheadDot = (dx * desired.x + dz * desired.z) / dist;
+      if (aheadDot <= 0) continue;
+
+      // Other mover's travel direction (smoothed walk facing is a stable proxy).
+      const ofx = this.walkFacing[j * 2];
+      const ofz = this.walkFacing[j * 2 + 1];
+      const headingDot = desired.x * ofx + desired.z * ofz;
+      if (headingDot > AGENT_AVOIDANCE_CROSS_DOT) continue; // walking mostly the same way — no conflict
+
+      // Side-pick via cross product: which side of our heading the other mover
+      // is on, so we always curve away from them (not toward).
+      const rightAmount = dx * desired.z - dz * desired.x; // >0 → other is to our right
+      const side = rightAmount > 0 ? -1 : 1;
+      const falloff = 1 - dist / AGENT_AVOIDANCE_RADIUS;
+      // Perpendicular-right of desired, scaled to the side away from the conflict.
+      steerX += desired.z * side * falloff;
+      steerZ += -desired.x * side * falloff;
+    }
+
+    if (steerX === 0 && steerZ === 0) return;
+
+    desired.x += steerX * AGENT_AVOIDANCE_STRENGTH;
+    desired.z += steerZ * AGENT_AVOIDANCE_STRENGTH;
+    const len = Math.hypot(desired.x, desired.z);
+    if (len > 1e-5) {
+      desired.x /= len;
+      desired.z /= len;
+    }
   }
 
   /**
@@ -468,6 +612,7 @@ export class CharacterController implements ICharacterDriver {
 
     // Clear path arrival so we don't re-enter; occupy already held.
     this.arrivalCallbacks[index] = undefined;
+    this.gaitGates[index]?.reset();
     this.setPhysicsMode(index, AgentBehavior.SEATED);
     this.play(index, 'sit_down');
   }
@@ -553,6 +698,7 @@ export class CharacterController implements ICharacterDriver {
     this.lastDelta = delta;
     this.characterManager.update(delta, renderer);
     this.stateMachine.update(delta, this);
+    this.tickGaitGates(delta);
   }
 
   /**
@@ -612,6 +758,7 @@ export class CharacterController implements ICharacterDriver {
       const distToNode = Math.hypot(toX, toZ);
 
       const desired = agent.getDesiredDirection(currentPos);
+      this.applyAvoidanceSteer(i, currentPos, desired, positions);
       const align = this.blendWalkFacing(i, desired.x, desired.z, dt);
       const fx = this.walkFacing[i * 2];
       const fz = this.walkFacing[i * 2 + 1];
@@ -619,7 +766,7 @@ export class CharacterController implements ICharacterDriver {
       // Ease along segment / destination; slow while yawing hard.
       const easeScale = this.computeSpeedScale(agent, currentPos, distToNode);
       const turnScale = THREE.MathUtils.lerp(AGENT_TURN_SPEED_FACTOR, 1, align);
-      const speed = AGENT_CRUISE_SPEED * easeScale * turnScale;
+      const speed = AGENT_CRUISE_SPEED * this.cruiseSpeedMult[i] * easeScale * turnScale;
       const step = Math.min(distToNode, speed * dt);
 
       // Move along facing (deliberate arcs) but don't overshoot the node.
@@ -629,13 +776,16 @@ export class CharacterController implements ICharacterDriver {
         currentPos.z + fz * step,
       );
       // If facing hasn't caught up, still progress toward the node a little
-      // so agents don't stall on sharp corners.
-      if (align < 0.35 && distToNode > PATH_NODE_ARRIVAL) {
-        const pull = step * 0.35;
+      // so agents don't stall on sharp corners — keep pull small to avoid desk cuts / skate.
+      if (align < 0.28 && distToNode > PATH_NODE_ARRIVAL) {
+        const pull = step * 0.22;
         const inv = 1 / distToNode;
-        this._movePos.x = currentPos.x + fx * step * 0.65 + toX * inv * pull;
-        this._movePos.z = currentPos.z + fz * step * 0.65 + toZ * inv * pull;
+        this._movePos.x = currentPos.x + fx * step * 0.78 + toX * inv * pull;
+        this._movePos.z = currentPos.z + fz * step * 0.78 + toZ * inv * pull;
       }
+
+      // Stay on walkable navmesh — no cutting through desks/furniture holes.
+      this.navMesh.clampMove(currentPos, this._movePos);
 
       this.characterManager.setPositionAndZeroVelocity(i, this._movePos);
       this.characterManager.setFacing(i, fx, fz);
@@ -692,9 +842,12 @@ export class CharacterController implements ICharacterDriver {
 
       if (!pushed) continue;
       this._sepPos.set(x, positions[i * 4 + 1], z);
+      // Keep partition push on-mesh too.
+      const from = this._movePos.set(positions[i * 4], positions[i * 4 + 1], positions[i * 4 + 2]);
+      this.navMesh.clampMove(from, this._sepPos);
       this.characterManager.setPosition(i, this._sepPos);
-      positions[i * 4] = x;
-      positions[i * 4 + 2] = z;
+      positions[i * 4] = this._sepPos.x;
+      positions[i * 4 + 2] = this._sepPos.z;
     }
   }
 
@@ -778,7 +931,12 @@ export class CharacterController implements ICharacterDriver {
         positions[i * 4 + 1],
         positions[i * 4 + 2] + oz,
       );
+      // Don't let soft push shove agents into desk holes.
+      const from = this._movePos.set(positions[i * 4], positions[i * 4 + 1], positions[i * 4 + 2]);
+      this.navMesh.clampMove(from, this._sepPos);
       this.characterManager.setPosition(i, this._sepPos);
+      positions[i * 4] = this._sepPos.x;
+      positions[i * 4 + 2] = this._sepPos.z;
     }
   }
 
@@ -787,6 +945,7 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents[index].cancel();
     this.clearSitArrival(index);
     this.arrivalCallbacks[index] = undefined;
+    this.gaitGates[index]?.reset();
     this.setPhysicsMode(index, AgentBehavior.IDLE);
   }
 
@@ -850,8 +1009,10 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents = [];
     this.separationScratch = new Float32Array(newCount * 2);
     this.walkFacing = new Float32Array(newCount * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
       this.pathAgents.push(new PathAgent(i, stateBuffer));
@@ -869,8 +1030,10 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents = [];
     this.separationScratch = new Float32Array(newCount * 2);
     this.walkFacing = new Float32Array(newCount * 2);
+    this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
       this.pathAgents.push(new PathAgent(i, stateBuffer));

@@ -12,6 +12,8 @@ const SHORTCUTS = [
   { keys: ['O'], label: 'Overview (Command Center)' },
   { keys: ['T'], label: 'Teams (Design mode)' },
   { keys: ['S'], label: 'Settings' },
+  { keys: ['E'], label: 'Wave at selected agent (they wave back)' },
+  { keys: ['Dbl-click'], label: 'Talk to an agent in the office' },
   { keys: ['1', '–', '9'], label: 'Select agent by number' },
   { keys: ['Esc'], label: 'Close modal / panel' },
   { keys: ['?'], label: 'Keyboard shortcuts' },

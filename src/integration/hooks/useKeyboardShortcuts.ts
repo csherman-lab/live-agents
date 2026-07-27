@@ -13,6 +13,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
 export function useKeyboardShortcuts(opts: {
   onGoLive: () => void;
   onOpenSettings: () => void;
+  onWave?: () => void;
 }) {
   const { setViewMode, viewMode } = useCoreStore();
   const { setSelectedNpc, setSettingsOpen, setShortcutsOpen } = useUiStore();
@@ -35,6 +36,12 @@ export function useKeyboardShortcuts(opts: {
       if (key === 's') {
         e.preventDefault();
         opts.onOpenSettings();
+        return;
+      }
+
+      if (key === 'e') {
+        e.preventDefault();
+        opts.onWave?.();
         return;
       }
 

@@ -23,6 +23,12 @@ import {
 } from '../constants';
 import { PoiManager } from '../world/PoiManager';
 
+/** Snaps an explicit AgentNode.accessory override to the nearest valid specialist ID. */
+function clampToSpecialistAccessory(id: number, validSet: number[]): number {
+  if (validSet.includes(id)) return id;
+  return validSet.reduce((best, cur) => (Math.abs(cur - id) < Math.abs(best - id) ? cur : best));
+}
+
 export class CharacterManager {
   private instanceCount = getAllAgents(getActiveAgentSet()).length + 1;
   private poiManager: PoiManager | null = null;
@@ -64,6 +70,7 @@ export class CharacterManager {
   private metaBuffer: THREE.StorageBufferAttribute | null = null;
   private numBones = 0;
   private headBoneIndex = -1;
+  private spineBoneIndex = -1;
 
   // Uniforms
   private uSpeed = uniform(AGENT_MOVE_SPEED);
@@ -82,7 +89,7 @@ export class CharacterManager {
     dracoLoader.setDecoderPath(DRACO_LIB_PATH);
     loader.setDRACOLoader(dracoLoader);
     try {
-      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb?v=250`);
+      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/character.glb?v=252`);
       // Face atlases: white eye whites + black pupils + thick smile. Cache-bust beats GLB embeds.
       const texLoader = new THREE.TextureLoader();
       const loadFaceAtlas = async (file: string) => {
@@ -133,6 +140,8 @@ export class CharacterManager {
         this.numBones = firstSkinnedMesh.skeleton.bones.length;
         const headBone = firstSkinnedMesh.skeleton.bones.find(b => b.name.toLowerCase() === 'head');
         this.headBoneIndex = headBone ? firstSkinnedMesh.skeleton.bones.indexOf(headBone) : -1;
+        const spineBone = firstSkinnedMesh.skeleton.bones.find(b => b.name.toLowerCase() === 'spine');
+        this.spineBoneIndex = spineBone ? firstSkinnedMesh.skeleton.bones.indexOf(spineBone) : -1;
       }
 
       const animations = gltf.animations;
@@ -143,13 +152,23 @@ export class CharacterManager {
 
       animNames.forEach((name, i) => {
         let clip = animations.find(a => a.name === name);
+        let reverse = false;
+
+        // Wave 4 (W4-A): no dedicated "Stand" clip exists in the GLB. Reverse-bake the
+        // "Sit" (SIT_DOWN) clip instead — sitting down played backwards reads as standing
+        // up — so getting up from a chair is a continuous motion, no Blender regen needed.
+        if (!clip && name === AnimationName.STAND) {
+          clip = animations.find(a => a.name === AnimationName.SIT_DOWN);
+          reverse = !!clip;
+        }
+
         // Fallback for essential animations
         if (!clip) {
           if (name === AnimationName.IDLE) clip = animations[0];
           else clip = animations.find(a => a.name === AnimationName.IDLE) || animations[0];
         }
 
-        const baked = this.bakeAnimation(firstSkinnedMesh, clip!, model);
+        const baked = this.bakeAnimation(firstSkinnedMesh, clip!, model, { reverse });
         bakedDataList.push(baked.data);
 
         this.animationsMeta[name] = {
@@ -310,7 +329,10 @@ export class CharacterManager {
     const allCharacters = getAllCharacters(system);
 
     // Accessory rules (art-direction.md + readable silhouette):
-    // 0=None (user), 2=Cap (lead — always visible), specialists alternate 1=Headphones / 2=Cap
+    // 0=None (user), 2=Cap (lead — always visible), specialists get a unique accessory per
+    // team slot from {1=Headphones, 3=Beanie, 4=Glasses, 5=Lanyard, 6=Backpack, 7=Scarf}
+    // (deterministic, no stacking). AgentNode.accessory can override the cycle explicitly.
+    const SPECIALIST_ACCESSORIES = [1, 3, 4, 5, 6, 7];
     let specialistSlot = 0;
 
     for (let i = 0; i < this.instanceCount; i++) {
@@ -349,9 +371,14 @@ export class CharacterManager {
         accessoryArray[i] = 0;
       } else if (i === system.leadAgent.index) {
         accessoryArray[i] = 2; // Cap — team lead signature (art-direction)
+      } else if (agentNode.accessory !== undefined) {
+        // Explicit override — clamp to the nearest valid specialist accessory ID.
+        accessoryArray[i] = clampToSpecialistAccessory(agentNode.accessory, SPECIALIST_ACCESSORIES);
+        specialistSlot++;
       } else {
-        // Specialists: headphones, cap, headphones, …
-        accessoryArray[i] = (specialistSlot % 2 === 0) ? 1 : 2;
+        // Specialists: unique accessory per slot, cycling through the set if there are more
+        // specialists than accessory types.
+        accessoryArray[i] = SPECIALIST_ACCESSORIES[specialistSlot % SPECIALIST_ACCESSORIES.length];
         specialistSlot++;
       }
 
@@ -469,7 +496,12 @@ export class CharacterManager {
       const isFace = isEyes || isMouth;
       const isHeadphones = name.toLowerCase().includes('headphones');
       const isCap = name.toLowerCase().includes('cap');
-      const isAccessory = isHeadphones || isCap;
+      const isBeanie = name.toLowerCase().includes('beanie');
+      const isGlasses = name.toLowerCase().includes('glasses');
+      const isLanyard = name.toLowerCase().includes('lanyard');
+      const isBackpack = name.toLowerCase().includes('backpack');
+      const isScarf = name.toLowerCase().includes('scarf');
+      const isAccessory = isHeadphones || isCap || isBeanie || isGlasses || isLanyard || isBackpack || isScarf;
       const isBody = name.toLowerCase().includes('body');
 
       // Faces must not carry instanceColor — Three auto-tints and turns sclera team-colored.
@@ -517,11 +549,21 @@ export class CharacterManager {
         material.opacityNode = accessoryType.equal(float(1)).select(instanceAlpha, float(0));
       } else if (isCap) {
         material.opacityNode = accessoryType.equal(float(2)).select(instanceAlpha, float(0));
+      } else if (isBeanie) {
+        material.opacityNode = accessoryType.equal(float(3)).select(instanceAlpha, float(0));
+      } else if (isGlasses) {
+        material.opacityNode = accessoryType.equal(float(4)).select(instanceAlpha, float(0));
+      } else if (isLanyard) {
+        material.opacityNode = accessoryType.equal(float(5)).select(instanceAlpha, float(0));
+      } else if (isBackpack) {
+        material.opacityNode = accessoryType.equal(float(6)).select(instanceAlpha, float(0));
+      } else if (isScarf) {
+        material.opacityNode = accessoryType.equal(float(7)).select(instanceAlpha, float(0));
       }
 
       if (isBody || isAccessory) {
         // Soft vinyl sheen without SSS (R5 SSS made rear/shadow sides read as black blobs).
-        material.roughness = isHeadphones ? 0.55 : 0.52;
+        material.roughness = isHeadphones ? 0.55 : isGlasses ? 0.32 : isLanyard ? 0.50 : isBackpack ? 0.55 : isScarf ? 0.48 : 0.52;
         material.metalness = 0;
         material.depthWrite = true;
         material.depthTest = true;
@@ -540,6 +582,31 @@ export class CharacterManager {
           const capTint = mix(vec3(1.0, 1.0, 1.0), instanceColor, float(0.88));
           const capRgb = map ? texture(map).rgb.mul(capTint) : capTint;
           material.colorNode = vec4(capRgb, baseAlpha);
+        } else if (isBeanie) {
+          // Team-colored knit beanie — same soft-lift headwear language as cap.
+          const beanieTint = mix(vec3(1.0, 1.0, 1.0), instanceColor, float(0.90));
+          const beanieRgb = map ? texture(map).rgb.mul(beanieTint) : beanieTint;
+          material.colorNode = vec4(beanieRgb, baseAlpha);
+        } else if (isGlasses) {
+          // Near-white frames — only a subtle team tint so they read as glasses, not headwear.
+          const glassesTint = mix(vec3(1.0, 1.0, 1.0), instanceColor, float(0.22));
+          const glassesRgb = map ? texture(map).rgb.mul(glassesTint) : glassesTint;
+          material.colorNode = vec4(glassesRgb, baseAlpha);
+        } else if (isLanyard) {
+          // Chest badge + strap — slightly darker than body, same family as muffs.
+          const lanyardRgb = instanceColor.mul(float(0.80));
+          const lanyardColor = map ? texture(map).rgb.mul(lanyardRgb) : lanyardRgb;
+          material.colorNode = vec4(lanyardColor, baseAlpha);
+        } else if (isBackpack) {
+          // Worn gear — darker tint, same family as muffs/badge.
+          const backpackRgb = instanceColor.mul(float(0.78));
+          const backpackColor = map ? texture(map).rgb.mul(backpackRgb) : backpackRgb;
+          material.colorNode = vec4(backpackColor, baseAlpha);
+        } else if (isScarf) {
+          // Soft knit garment — soft-lift tint, same family as cap/beanie headwear.
+          const scarfTint = mix(vec3(1.0, 1.0, 1.0), instanceColor, float(0.90));
+          const scarfRgb = map ? texture(map).rgb.mul(scarfTint) : scarfTint;
+          material.colorNode = vec4(scarfRgb, baseAlpha);
         } else if (map) {
           const texColor = texture(map);
           material.colorNode = vec4(texColor.rgb.mul(instanceColor), baseAlpha);
@@ -587,18 +654,40 @@ export class CharacterManager {
         }
       }
 
-      // Eyes/mouth/cap/headphones must follow the baked skeleton's head bone.
-      // GLB skin indices can disagree with the body skeleton used for bakeAnimation,
-      // which made face cards float beside heads (and accessories drift).
-      if ((isFace || isHeadphones || isCap) && this.headBoneIndex !== -1) {
+      // Eyes/mouth/cap/headphones/beanie/glasses/scarf must follow the baked skeleton's head
+      // bone; lanyard/backpack hang from the chest/back and follow the spine bone instead.
+      // GLB skin indices can disagree with the body skeleton used for bakeAnimation, which
+      // made face cards float beside heads (and accessories drift).
+      const headPinned = isFace || isHeadphones || isCap || isBeanie || isGlasses || isScarf;
+      if (headPinned && this.headBoneIndex !== -1) {
         const skinIndices = new Float32Array(geometry.attributes.position.count * 4).fill(this.headBoneIndex);
+        const skinWeights = new Float32Array(geometry.attributes.position.count * 4).fill(0);
+        for (let i = 0; i < geometry.attributes.position.count; i++) skinWeights[i * 4] = 1.0;
+        instancedGeometry.setAttribute('skinIndex', new THREE.BufferAttribute(skinIndices, 4));
+        instancedGeometry.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeights, 4));
+      } else if ((isLanyard || isBackpack) && this.spineBoneIndex !== -1) {
+        const skinIndices = new Float32Array(geometry.attributes.position.count * 4).fill(this.spineBoneIndex);
         const skinWeights = new Float32Array(geometry.attributes.position.count * 4).fill(0);
         for (let i = 0; i < geometry.attributes.position.count; i++) skinWeights[i * 4] = 1.0;
         instancedGeometry.setAttribute('skinIndex', new THREE.BufferAttribute(skinIndices, 4));
         instancedGeometry.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeights, 4));
       }
 
-      const isVisible = isHeadphones ? accessoryType.equal(float(1)) : (isCap ? accessoryType.equal(float(2)) : float(1));
+      const isVisible = isHeadphones
+        ? accessoryType.equal(float(1))
+        : isCap
+          ? accessoryType.equal(float(2))
+          : isBeanie
+            ? accessoryType.equal(float(3))
+            : isGlasses
+              ? accessoryType.equal(float(4))
+              : isLanyard
+                ? accessoryType.equal(float(5))
+                : isBackpack
+                  ? accessoryType.equal(float(6))
+                  : isScarf
+                    ? accessoryType.equal(float(7))
+                    : float(1);
       const vertexNode = this.createVertexNode(isVisible.and(instanceAlpha.greaterThan(0)));
       material.positionNode = vertexNode;
       (material as any).castShadowPositionNode = vertexNode;
@@ -661,8 +750,10 @@ export class CharacterManager {
 
         const startTime = animParams.x;
         const loopMode = animParams.y;
+        // .w = playback rate (1 = normal). Syncs Walk feet to cruise speed.
+        const playbackRate = animParams.w;
 
-        const animTime = this.uTime.sub(startTime).max(0);
+        const animTime = this.uTime.sub(startTime).max(0).mul(playbackRate);
         const t = loopMode.greaterThan(0.5) ? animTime.div(duration).fract() : animTime.div(duration).clamp(0, 1);
 
         // Fractional frame index → lerp bone matrices between adjacent baked frames
@@ -707,7 +798,20 @@ export class CharacterManager {
     })();
   }
 
-  private bakeAnimation(mesh: THREE.SkinnedMesh, clip: THREE.AnimationClip, root: THREE.Object3D) {
+  /**
+   * Bakes an AnimationClip into a flat bone-matrix buffer for GPU skinning.
+   *
+   * @param options.reverse When true, writes each sampled frame's bone matrices into the
+   *   mirrored frame slot (frame f → numFrames-1-f) so the baked clip plays back from the
+   *   source clip's end pose to its start pose. Used to derive a "stand up" clip from the
+   *   "sit down" clip (bakeAnimation reverse option) when no dedicated GLB clip exists.
+   */
+  private bakeAnimation(
+    mesh: THREE.SkinnedMesh,
+    clip: THREE.AnimationClip,
+    root: THREE.Object3D,
+    options: { reverse?: boolean } = {},
+  ) {
     const mixer = new THREE.AnimationMixer(root);
     mixer.clipAction(clip).play();
     const skeleton = mesh.skeleton;
@@ -719,8 +823,9 @@ export class CharacterManager {
       mixer.setTime((f / numFrames) * duration);
       root.updateMatrixWorld(true);
       skeleton.update();
+      const destFrame = options.reverse ? numFrames - 1 - f : f;
       for (let b = 0; b < numBones; b++) {
-        const i = (f * numBones + b) * 16;
+        const i = (destFrame * numBones + b) * 16;
         for (let k = 0; k < 16; k++) data[i + k] = skeleton.boneMatrices[b * 16 + k];
       }
     }
@@ -807,6 +912,13 @@ export class CharacterManager {
       if (meta) {
         this.agentStateBuffer.setAnimation(index, meta.index, loop, this.currentTime);
       }
+    }
+  }
+
+  /** Playback rate for the current clip (1 = normal). Used for Walk stride sync. */
+  public setAnimationRate(index: number, rate: number) {
+    if (this.agentStateBuffer && index >= 0 && index < this.instanceCount) {
+      this.agentStateBuffer.setAnimationRate(index, rate);
     }
   }
 

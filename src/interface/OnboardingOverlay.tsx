@@ -71,6 +71,7 @@ const STEPS: Step[] = [
     bullets: [
       'Drag to orbit · scroll to zoom the office',
       'Press 1–9 or click an agent to follow them',
+      'Double-click an agent to talk · E to wave',
       'Status bubbles show what each agent is doing',
     ],
   },
@@ -117,7 +118,7 @@ const STEPS: Step[] = [
     lead:
       'You are set. Brief your team, chat from overview, or jump into Go Live.',
     bullets: [
-      'G — Go Live · 1–9 — follow an agent · ? — shortcuts',
+      'G — Go Live · 1–9 — follow · double-click — talk · E — wave · ? — shortcuts',
       'Chat with lead agent from Command Center (text-first)',
       'Replay this intro from Settings anytime',
     ],

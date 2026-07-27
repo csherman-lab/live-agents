@@ -18,6 +18,7 @@ export const STATE_MAP: Record<CharacterStateKey, CharacterStateDef> = {
   sit_down:    { animation: AnimationName.SIT_DOWN,                             loop: false, nextState: 'sit_idle', interruptible: false },
   sit_idle:    { animation: AnimationName.SIT_IDLE,    expression: 'idle',      loop: true,  interruptible: true },
   sit_work:    { animation: AnimationName.SIT_WORK,    expression: 'idle',      loop: true,  interruptible: true },
+  stand:       { animation: AnimationName.STAND,                                loop: false, nextState: 'idle',    interruptible: false },
   look_around: { animation: AnimationName.LOOK_AROUND, expression: 'surprised', loop: false, nextState: 'idle',    interruptible: true },
   happy:       { animation: AnimationName.HAPPY,       expression: 'happy',     loop: false, nextState: 'idle',    interruptible: true },
   sad:         { animation: AnimationName.SAD,         expression: 'sad',       loop: false, nextState: 'idle',    interruptible: true },

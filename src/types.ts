@@ -80,6 +80,7 @@ export enum AnimationName {
   SIT_DOWN = 'Sit',      // one-shot sit-down entry animation
   SIT_IDLE = 'Sit_Idle', // loop: seated idle
   SIT_WORK = 'Sit_Work', // loop: seated working
+  STAND = 'Stand',       // one-shot stand-up exit animation (baked as reversed Sit if no GLB clip)
   LOOK_AROUND = 'LookAround',
   HAPPY = 'Happy',
   SAD = 'Sad',
@@ -108,6 +109,7 @@ export type CharacterStateKey =
   | 'sit_down'   // one-shot entry animation; auto-transitions to sit_idle
   | 'sit_idle'   // looping: seated at rest
   | 'sit_work'   // looping: seated working
+  | 'stand'      // one-shot exit animation (getting up); auto-transitions to idle
   | 'look_around'
   | 'happy'
   | 'happy_loop' // looping version of happy, no auto-transition
