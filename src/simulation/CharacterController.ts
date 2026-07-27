@@ -18,6 +18,8 @@ import {
   AGENT_SEPARATION_RADIUS,
   AGENT_TURN_RATE,
   AGENT_TURN_SPEED_FACTOR,
+  GAIT_COMMIT_TIME,
+  GAIT_SETTLE_TIME,
   PARTITION_PUSH_BOXES,
   PATH_NODE_ARRIVAL,
   SIT_APPROACH_MIN_SPEED_SCALE,
@@ -25,10 +27,12 @@ import {
   SIT_APPROACH_SPEED,
   SIT_ARRIVAL_BLEND_DURATION,
   SIT_ARRIVAL_BLEND_EASE,
+  WALK_STRIDE_LENGTH,
 } from './constants';
 import { CharacterManager } from './entities/CharacterManager';
 import { NavMeshManager } from './pathfinding/NavMeshManager';
 import { PathAgent } from './pathfinding/PathAgent';
+import { GaitGate, computeWalkPlaybackRate } from './presence/LocomotionPresence';
 import { PoiManager } from './world/PoiManager';
 
 /** Pending sit walk — navmesh still owns path until the slow-approach radius. */
@@ -83,6 +87,8 @@ export class CharacterController implements ICharacterDriver {
   private walkFacing: Float32Array;
   /** Per-agent deterministic cruise-speed multiplier (Wave 2 motion deepen — ±AGENT_CRUISE_VARIANCE). */
   private cruiseSpeedMult: Float32Array;
+  /** Per-agent walk start/stop gate (Wave 1 locomotion presence). */
+  private gaitGates: GaitGate[] = [];
   private readonly _sepPos = new THREE.Vector3();
   private readonly _sitPos = new THREE.Vector3();
   private readonly _sitForward = new THREE.Vector3();
@@ -100,6 +106,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(count);
     this.sitIntents = new Array(count).fill(null);
     this.sitMotions = new Array(count).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(count);
 
     const stateBuffer = characterManager.getAgentStateBuffer()!;
     for (let i = 0; i < count; i++) {
@@ -131,6 +138,47 @@ export class CharacterController implements ICharacterDriver {
     return out;
   }
 
+  private static buildGaitGates(count: number): GaitGate[] {
+    const gates: GaitGate[] = [];
+    for (let i = 0; i < count; i++) {
+      gates.push(new GaitGate({ commitTime: GAIT_COMMIT_TIME, settleTime: GAIT_SETTLE_TIME }));
+    }
+    return gates;
+  }
+
+  private applyWalkPlaybackRate(index: number): void {
+    const duration = this.getAnimationDuration(AnimationName.WALK);
+    const cruise = AGENT_CRUISE_SPEED * (this.cruiseSpeedMult[index] ?? 1);
+    const rate = computeWalkPlaybackRate(cruise, WALK_STRIDE_LENGTH, duration);
+    this.characterManager.setAnimationRate(index, rate);
+  }
+
+  /** Tick gait gates — delayed walk enter / idle exit around pathing. */
+  private tickGaitGates(delta: number): void {
+    const dt = Math.min(Math.max(delta, 0), 0.1);
+    for (let i = 0; i < this.gaitGates.length; i++) {
+      const soft = this.sitMotions[i];
+      // Seat-pose blend is seated, not locomotion — reset so settle doesn't force idle over sit_down.
+      if (soft?.phase === 'blend') {
+        this.gaitGates[i].reset();
+        continue;
+      }
+      const isLocomoting = this.pathAgents[i].isMoving || soft?.phase === 'slow';
+      const action = this.gaitGates[i].update(dt, !!isLocomoting);
+      if (action === 'walk') {
+        const cur = this.stateMachine.getState(i);
+        if (cur === 'idle' || cur === 'look_around' || cur === 'walk' || cur === 'wave') {
+          this.stateMachine.transition(i, 'walk', this);
+          this.applyWalkPlaybackRate(i);
+        }
+      } else if (action === 'idle') {
+        if (this.stateMachine.getState(i) === 'walk') {
+          this.stateMachine.transition(i, 'idle', this);
+        }
+      }
+    }
+  }
+
   // ── High-level character API ─────────────────────────────────
 
   /**
@@ -148,7 +196,17 @@ export class CharacterController implements ICharacterDriver {
       this.poiManager.releaseAll(index);
     }
 
+    // Explicit pose/chat/sit owns the body — cancel pending gait settle so it
+    // can't stomp listen/talk with a delayed idle.
+    if (state !== 'walk') {
+      this.gaitGates[index]?.reset();
+    }
+
     this.stateMachine.transition(index, state, this);
+
+    if (state === 'walk') {
+      this.applyWalkPlaybackRate(index);
+    }
   }
 
   /**
@@ -222,7 +280,8 @@ export class CharacterController implements ICharacterDriver {
     // IDLE physics: CPU owns eased seek + yaw (shared waypoint/facing slots).
     // Mode stays semantically "pathing" via PathAgent.isMoving for separation.
     this.setPhysicsMode(index, AgentBehavior.IDLE);
-    this.play(index, 'walk');
+    // GaitGate enters walk after a short commit — avoids idle→walk pop mid-step.
+    this.gaitGates[index]?.onPathStart();
 
     return true;
   }
@@ -322,7 +381,7 @@ export class CharacterController implements ICharacterDriver {
     };
 
     this.setPhysicsMode(index, AgentBehavior.IDLE);
-    this.play(index, 'walk');
+    this.gaitGates[index]?.onPathStart();
 
     this.poiManager.releaseAll(index);
     this.poiManager.occupy(poi.id, index);
@@ -553,6 +612,7 @@ export class CharacterController implements ICharacterDriver {
 
     // Clear path arrival so we don't re-enter; occupy already held.
     this.arrivalCallbacks[index] = undefined;
+    this.gaitGates[index]?.reset();
     this.setPhysicsMode(index, AgentBehavior.SEATED);
     this.play(index, 'sit_down');
   }
@@ -638,6 +698,7 @@ export class CharacterController implements ICharacterDriver {
     this.lastDelta = delta;
     this.characterManager.update(delta, renderer);
     this.stateMachine.update(delta, this);
+    this.tickGaitGates(delta);
   }
 
   /**
@@ -873,6 +934,7 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents[index].cancel();
     this.clearSitArrival(index);
     this.arrivalCallbacks[index] = undefined;
+    this.gaitGates[index]?.reset();
     this.setPhysicsMode(index, AgentBehavior.IDLE);
   }
 
@@ -939,6 +1001,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
       this.pathAgents.push(new PathAgent(i, stateBuffer));
@@ -959,6 +1022,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
       this.pathAgents.push(new PathAgent(i, stateBuffer));

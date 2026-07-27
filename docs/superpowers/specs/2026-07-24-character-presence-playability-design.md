@@ -117,6 +117,15 @@ Office feels socially alive when idle; calm when working; player approach can ge
 
 Full blend trees / root motion; new rooms; voice lip-sync; >2 circle chats; combat/inventory/quests.
 
-## Wave order
+## Wave 5 — Presence harden (2026-07-27)
 
-1 → 2 → 3 → 4 (each wave playable and visibly better alone).
+Shipped on top of Waves 1–4 (no voice / lip-sync):
+
+1. Chat approach fail → abort session + toast; skip walk if already close
+2. Ease + hold mutual facing during approach / chat
+3. Ambient meetup: walk free NPCs together, then talk
+4. Return-to-desk / boardroom after player chat when tasked
+5. Player `E` wave → NPC reacts; listener micro-beats
+6. Discoverability: shortcuts, onboarding, inspector hint
+7. DEV: `window.__laPresence()` session dump
+

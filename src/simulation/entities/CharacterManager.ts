@@ -750,8 +750,10 @@ export class CharacterManager {
 
         const startTime = animParams.x;
         const loopMode = animParams.y;
+        // .w = playback rate (1 = normal). Syncs Walk feet to cruise speed.
+        const playbackRate = animParams.w;
 
-        const animTime = this.uTime.sub(startTime).max(0);
+        const animTime = this.uTime.sub(startTime).max(0).mul(playbackRate);
         const t = loopMode.greaterThan(0.5) ? animTime.div(duration).fract() : animTime.div(duration).clamp(0, 1);
 
         // Fractional frame index → lerp bone matrices between adjacent baked frames
@@ -910,6 +912,13 @@ export class CharacterManager {
       if (meta) {
         this.agentStateBuffer.setAnimation(index, meta.index, loop, this.currentTime);
       }
+    }
+  }
+
+  /** Playback rate for the current clip (1 = normal). Used for Walk stride sync. */
+  public setAnimationRate(index: number, rate: number) {
+    if (this.agentStateBuffer && index >= 0 && index < this.instanceCount) {
+      this.agentStateBuffer.setAnimationRate(index, rate);
     }
   }
 

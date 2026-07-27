@@ -199,27 +199,34 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({ isFloating }) => {
                   ) : isChatting ? (
                     null
                   ) : (
-                    <button
-                      onClick={handleStartChat}
-                      disabled={!canChat}
-                      title={!canChat ? reason : undefined}
-                      className={`w-full h-10 px-4 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-95 text-[10px] font-black uppercase tracking-widest ${canChat
-                          ? 'bg-appleBlue text-white border-none shadow-md'
-                          : 'bg-zinc-50 text-zinc-300 border border-transparent cursor-not-allowed'
-                        }`}
-                    >
-                      {canChat ? (
-                        <>
-                          <MessageSquare size={13} className="text-white" />
-                          Open Chat
-                        </>
-                      ) : (
-                        <>
-                          <Lock size={12} className="opacity-40" />
-                          {reason}
-                        </>
+                    <div className="flex flex-col gap-1.5 w-full">
+                      <button
+                        onClick={handleStartChat}
+                        disabled={!canChat}
+                        title={!canChat ? reason : undefined}
+                        className={`w-full h-10 px-4 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-95 text-[10px] font-black uppercase tracking-widest ${canChat
+                            ? 'bg-appleBlue text-white border-none shadow-md'
+                            : 'bg-zinc-50 text-zinc-300 border border-transparent cursor-not-allowed'
+                          }`}
+                      >
+                        {canChat ? (
+                          <>
+                            <MessageSquare size={13} className="text-white" />
+                            Open Chat
+                          </>
+                        ) : (
+                          <>
+                            <Lock size={12} className="opacity-40" />
+                            {reason}
+                          </>
+                        )}
+                      </button>
+                      {canChat && (
+                        <p className="text-[10px] text-center text-[var(--apple-text-secondary)] leading-snug px-1">
+                          Double-click in the office to talk · E to wave
+                        </p>
                       )}
-                    </button>
+                    </div>
                   )}
                 </div>
               )}

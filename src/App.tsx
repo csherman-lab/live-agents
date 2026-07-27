@@ -198,6 +198,7 @@ const App: React.FC = () => {
   useKeyboardShortcuts({
     onGoLive: handleGoLive,
     onOpenSettings: () => setSettingsOpen(true),
+    onWave: () => sceneManager?.waveAtSelected(),
   });
 
   useThemeSync();

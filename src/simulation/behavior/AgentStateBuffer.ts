@@ -17,7 +17,7 @@ import { AgentBehavior } from '../../types';
  *   .x = startTime   (global time when animation started)
  *   .y = loopMode    (1.0 = loop, 0.0 = clamp)
  *   .z = alpha       (1.0 = opaque, <1.0 = transparent)
- *   .w = (unused)
+ *   .w = playbackRate (1.0 = normal; used to sync Walk feet to cruise speed)
  *
  * CPU writes metadata, GPU shader reads them.
  */
@@ -33,9 +33,10 @@ export class AgentStateBuffer {
 
   constructor(private readonly count: number) {
     this.array = new Float32Array(count * 8);
-    // Initialize alpha to 1.0 (opaque)
+    // Initialize alpha to 1.0 (opaque) and playback rate to 1.0
     for (let i = 0; i < count; i++) {
       this.array[i * 8 + 6] = 1.0;
+      this.array[i * 8 + 7] = 1.0;
     }
     this.attribute = new THREE.StorageInstancedBufferAttribute(this.array, 8);
     this.storageNode = storage(this.attribute, 'vec4', count * 2);
@@ -62,7 +63,18 @@ export class AgentStateBuffer {
     this.array[index * 8 + 1] = animIndex;
     this.array[index * 8 + 4] = startTime;
     this.array[index * 8 + 5] = loop ? 1.0 : 0.0;
+    this.array[index * 8 + 7] = 1.0; // reset playback rate on clip change
     this.attribute.needsUpdate = true;
+  }
+
+  /** Multiplier on animation clock (Walk stride sync). Default 1. */
+  public setAnimationRate(index: number, rate: number): void {
+    this.array[index * 8 + 7] = rate;
+    this.attribute.needsUpdate = true;
+  }
+
+  public getAnimationRate(index: number): number {
+    return this.array[index * 8 + 7] || 1.0;
   }
 
   // ── Transparency ─────────────────────────────────────────────

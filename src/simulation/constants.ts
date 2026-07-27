@@ -92,6 +92,41 @@ export const AGENT_TURN_RATE = 8.2;
  */
 export const AGENT_TURN_SPEED_FACTOR = 0.42;
 
+// ── Locomotion presence (Wave 1 — gait + stride sync) ─────────
+/**
+ * Approximate world-units traveled per full Walk clip cycle at rate 1.
+ * Tuned so computeWalkPlaybackRate keeps feet near contact at AGENT_CRUISE_SPEED.
+ */
+export const WALK_STRIDE_LENGTH = 0.42;
+/** Seconds of continuous pathing before switching idle → walk. */
+export const GAIT_COMMIT_TIME = 0.08;
+/** Seconds after path end before switching walk → idle. */
+export const GAIT_SETTLE_TIME = 0.1;
+
+// ── Conversation / social presence (Waves 2–4) ────────────────
+/** Player↔NPC stand-off distance when opening chat. */
+export const CHAT_APPROACH_DISTANCE = 1.2;
+/** Double-click window for starting chat on an NPC (ms). */
+export const DOUBLE_CLICK_MS = 350;
+/** Hover must last this long before a reaction roll (ms). */
+export const HOVER_REACTION_MIN_MS = 450;
+export const HOVER_REACTION_CHANCE = 0.35;
+export const HOVER_REACTION_COOLDOWN_MS = 8000;
+/** Ambient NPC↔NPC chat cadence. */
+export const SOCIAL_AMBIENT_INTERVAL = 12;
+export const SOCIAL_AMBIENT_DURATION = 6;
+/** Max distance to start an ambient meetup (agents walk together if farther than chat distance). */
+export const SOCIAL_AMBIENT_MEETUP_RADIUS = 8;
+/** Stand-off once ambient pair has walked together. */
+export const SOCIAL_AMBIENT_PAIR_RADIUS = 2.2;
+export const SOCIAL_NOTICE_RADIUS = 1.8;
+export const SOCIAL_NOTICE_CHANCE = 0.2;
+export const SOCIAL_NOTICE_COOLDOWN = 18;
+/** Listener micro-beat interval while someone else talks (seconds). */
+export const LISTENER_MICROBEAT_INTERVAL = 3.5;
+/** Turn rate for conversation facing ease (rad/s). */
+export const CONVERSATION_FACE_TURN_RATE = 6.5;
+
 // ── Agent Separation (soft push-apart; not RVO) ───────────────
 /**
  * Soft XZ separation so idle/wander agents don’t stack.
