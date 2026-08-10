@@ -1,7 +1,9 @@
-import { AlertCircle, CheckCircle2, Loader2, MessageSquareWarning, Package, Sparkles, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, MessageSquareWarning, Package, Radio, X } from 'lucide-react';
 import React from 'react';
 import { useCoreStore } from '../integration/store/coreStore';
 import { useUiStore } from '../integration/store/uiStore';
+import { usePresenceStore } from '../integration/presence/presenceStore';
+import { resolveMirrorHudStatus } from '../integration/presence/mirrorHudStatus';
 import { countPendingApprovals } from '../integration/store/projectStore';
 import { exportProjectDeliverables } from '../utils/exportProject';
 import { APPLE_BLUE, APPLE_TEXT, APPLE_TEXT_SECONDARY } from '../theme/brand';
@@ -13,16 +15,46 @@ interface SimulationPhaseBannerProps {
 const SimulationPhaseBanner: React.FC<SimulationPhaseBannerProps> = ({ onEndProject }) => {
   const { phase, tasks, isGeneratingAsset, generationError, setFinalOutputOpen, setKanbanOpen, userBrief } = useCoreStore();
   const { isDemoMode, setDemoMode } = useUiStore();
+  const mirrorMode = usePresenceStore((s) => s.mirrorMode);
+  const demoSwarmActive = usePresenceStore((s) => s.demoSwarmActive);
+  const agentCount = usePresenceStore((s) => Object.keys(s.agents).length);
+  const connected = usePresenceStore((s) => s.connected);
+  const hubOnline = usePresenceStore((s) => s.hubOnline);
+  const hubHealth = usePresenceStore((s) => s.hubHealth);
 
   const pendingApprovals = countPendingApprovals(tasks);
+
+  // Mirror companion: never show BYOK / Command Center chrome.
+  if (mirrorMode) {
+    const status = resolveMirrorHudStatus({
+      demoSwarmActive,
+      connected,
+      hubOnline,
+      hubHealth: hubHealth ? { ok: hubHealth.ok } : null,
+    });
+    const label =
+      status.phase === 'demo'
+        ? 'Demo swarm — named workers preview the office'
+        : status.phase === 'cursor_live'
+          ? agentCount > 0
+            ? `${agentCount} Cursor agent${agentCount === 1 ? '' : 's'} in the office`
+            : 'Connected — waiting for Cursor agents'
+          : 'Watch your swarm — Mock Swarm or run an agent in Cursor';
+    return (
+      <div className="shrink-0 px-4 py-2 border-b border-white/5 bg-black/20 flex items-center gap-2">
+        <Radio size={13} className={connected || demoSwarmActive ? 'text-emerald-400' : 'text-white/50'} />
+        <p className="text-[12px] font-medium text-white/80 truncate">{label}</p>
+      </div>
+    );
+  }
 
   if (isDemoMode) {
     return (
       <div className="shrink-0 px-4 py-2.5 border-b border-appleBlue/15 bg-appleBlue/8 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
-          <Sparkles size={14} className="text-appleBlue shrink-0" />
+          <Radio size={14} className="text-appleBlue shrink-0" />
           <p className="text-[12px] font-medium text-appleBlue truncate">
-            Demo mode — explore the office. Add an API key to run agents.
+            Demo mode — explore the office. Add an API key in Advanced to run BYOK agents.
           </p>
         </div>
         <button
