@@ -108,6 +108,23 @@ export class Stage {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Ease camera to a pleasing office overview (mirror enter / mock swarm). */
+  public frameOfficeOverview(immediate = false): void {
+    this.followTarget = null;
+    this.isChatting = false;
+    this.controls.target.copy(this.defaultTarget);
+    const ideal = new THREE.Vector3(8.2, 8.0, 9.7);
+    if (immediate) {
+      this.camera.position.copy(ideal);
+    } else {
+      // Nudge toward overview; Stage.update damping finishes the ease.
+      this.camera.position.lerp(ideal, 0.35);
+    }
+    this.controls.minDistance = Stage.ROAM_MIN_DIST;
+    this.controls.maxDistance = Stage.ROAM_MAX_DIST;
+    this.controls.update();
+  }
+
   /** Call every frame with the character's world position to follow, or null to return to origin. */
   public setFollowTarget(pos: THREE.Vector3 | null) {
     this.followTarget = pos ? pos.clone() : null;

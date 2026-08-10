@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { enterWorkspace } from './enterWorkspace';
+import { usePresenceStore } from './presence/presenceStore';
 import { useCoreStore } from './store/coreStore';
 import { useUiStore } from './store/uiStore';
 import { useToastStore } from './store/toastStore';
@@ -13,14 +14,25 @@ beforeEach(() => {
     isSettingsOpen: false,
   });
   useToastStore.setState({ toasts: [] });
+  usePresenceStore.setState({ mirrorMode: false });
 });
 
 describe('enterWorkspace', () => {
-  it('blocks without an API key or demo mode and opens Settings', () => {
+  it('blocks without an API key, demo mode, or mirror mode and opens Settings', () => {
     expect(enterWorkspace()).toBe(false);
     expect(useUiStore.getState().isSettingsOpen).toBe(true);
     expect(useToastStore.getState().toasts[0]?.message).toMatch(/API key/i);
     expect(useCoreStore.getState().viewMode).toBe('overview');
+  });
+
+  it('enters simulation in mirror mode without an API key', () => {
+    usePresenceStore.setState({ mirrorMode: true });
+    expect(enterWorkspace()).toBe(true);
+    expect(useCoreStore.getState().viewMode).toBe('simulation');
+    expect(useCoreStore.getState().phase).toBe('idle');
+    expect(useUiStore.getState().isDemoMode).toBe(false);
+    expect(useCoreStore.getState().isLogOpen).toBe(false);
+    expect(useCoreStore.getState().isKanbanOpen).toBe(false);
   });
 
   it('enters simulation in demo mode without starting a project', () => {

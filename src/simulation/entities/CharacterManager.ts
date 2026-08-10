@@ -37,8 +37,20 @@ export class CharacterManager {
   private posAttribute: THREE.StorageInstancedBufferAttribute | null = null;
   private velAttribute: THREE.StorageInstancedBufferAttribute | null = null;
   private colorAttribute: THREE.InstancedBufferAttribute | null = null;
+  /** Base RGB (agent colors) before presence dimming. */
+  private baseColorArray: Float32Array | null = null;
+  private presenceDimmed: boolean[] = [];
+  /**
+   * Per-instance deadline (performance.now) while CPU owns position after setPosition.
+   * Prevents syncFromGPU from re-applying stale GPU zeros after instance resize/warp.
+   */
+  private positionHoldUntil: Float64Array = new Float64Array(0);
   private accessoryAttribute: THREE.InstancedBufferAttribute | null = null;
   private scaleAttribute: THREE.InstancedBufferAttribute | null = null;
+  /** Base instance scales (before spawn pulse). */
+  private baseScale: Float32Array | null = null;
+  /** Remaining spawn-pulse seconds per instance (0 = idle). */
+  private spawnPulseLeft: Float32Array | null = null;
   private positionStorage: any;
   private velocityStorage: any;
 
@@ -278,9 +290,30 @@ export class CharacterManager {
     if (!this.posAttribute) return null;
     try {
       const buffer = await renderer.getArrayBufferAsync(this.posAttribute);
-      this.debugPosArray = new Float32Array(buffer);
-      // Keep the CPU-side attribute array in sync so setPosition doesn't upload stale data
-      (this.posAttribute.array as Float32Array).set(this.debugPosArray);
+      const gpu = new Float32Array(buffer);
+      const arr = this.posAttribute.array as Float32Array;
+      const now = performance.now();
+      let holding = false;
+
+      for (let i = 0; i < this.instanceCount; i++) {
+        const until = this.positionHoldUntil[i] ?? 0;
+        if (until > now) {
+          // CPU teleport/warp still authoritative — keep feeding GPU until hold expires.
+          gpu[i * 4 + 0] = arr[i * 4 + 0];
+          gpu[i * 4 + 1] = arr[i * 4 + 1];
+          gpu[i * 4 + 2] = arr[i * 4 + 2];
+          gpu[i * 4 + 3] = arr[i * 4 + 3];
+          holding = true;
+        } else {
+          arr[i * 4 + 0] = gpu[i * 4 + 0];
+          arr[i * 4 + 1] = gpu[i * 4 + 1];
+          arr[i * 4 + 2] = gpu[i * 4 + 2];
+          arr[i * 4 + 3] = gpu[i * 4 + 3];
+        }
+      }
+
+      this.debugPosArray = gpu;
+      if (holding) this.posAttribute.needsUpdate = true;
     } catch {
       // WebGPU readback not available – fall back to stale data
     }
@@ -294,9 +327,46 @@ export class CharacterManager {
     if (this.expressionBuffer) {
       this.expressionBuffer.update(delta);
     }
+    this.tickSpawnPulse(delta);
     if (this.computeNode) {
       renderer.compute(this.computeNode);
     }
+  }
+
+  /** Soft “pop in” when a mirror agent joins the office. */
+  public pulseSpawn(indices: number[]): void {
+    if (!this.spawnPulseLeft || !this.baseScale || indices.length === 0) return;
+    for (const i of indices) {
+      if (i < 0 || i >= this.spawnPulseLeft.length) continue;
+      this.spawnPulseLeft[i] = 0.4;
+      // Ensure we start from true base scale (avoids compounding miniature stuck state).
+      if (this.scaleAttribute) {
+        (this.scaleAttribute.array as Float32Array)[i] = this.baseScale[i];
+        this.scaleAttribute.needsUpdate = true;
+      }
+    }
+  }
+
+  private tickSpawnPulse(delta: number): void {
+    if (!this.spawnPulseLeft || !this.baseScale || !this.scaleAttribute) return;
+    let dirty = false;
+    const arr = this.scaleAttribute.array as Float32Array;
+    const duration = 0.4;
+    for (let i = 0; i < this.spawnPulseLeft.length; i++) {
+      const left = this.spawnPulseLeft[i];
+      if (left <= 0) continue;
+      const next = Math.max(0, left - delta);
+      this.spawnPulseLeft[i] = next;
+      if (next <= 0) {
+        arr[i] = this.baseScale[i];
+      } else {
+        const t = 1 - next / duration;
+        const kick = Math.sin(Math.min(1, t) * Math.PI) * 0.12;
+        arr[i] = this.baseScale[i] * (1 + kick);
+      }
+      dirty = true;
+    }
+    if (dirty) this.scaleAttribute.needsUpdate = true;
   }
 
   private cleanupInstances() {
@@ -392,8 +462,12 @@ export class CharacterManager {
     this.posAttribute = new THREE.StorageInstancedBufferAttribute(posArray, 4);
     this.velAttribute = new THREE.StorageInstancedBufferAttribute(velArray, 4);
     this.colorAttribute = new THREE.InstancedBufferAttribute(colorArray, 3);
+    this.baseColorArray = Float32Array.from(colorArray);
+    this.presenceDimmed = new Array(this.instanceCount).fill(false);
     this.accessoryAttribute = new THREE.InstancedBufferAttribute(accessoryArray, 1);
     this.scaleAttribute = new THREE.InstancedBufferAttribute(scaleArray, 1);
+    this.baseScale = Float32Array.from(scaleArray);
+    this.spawnPulseLeft = new Float32Array(this.instanceCount);
 
     this.positionStorage = storage(this.posAttribute, 'vec4', this.instanceCount);
     this.velocityStorage = storage(this.velAttribute, 'vec4', this.instanceCount);
@@ -874,6 +948,13 @@ export class CharacterManager {
       this.debugPosArray[index * 4 + 1] = position.y;
       this.debugPosArray[index * 4 + 2] = position.z;
     }
+    if (this.positionHoldUntil.length < this.instanceCount) {
+      const next = new Float64Array(this.instanceCount);
+      next.set(this.positionHoldUntil);
+      this.positionHoldUntil = next;
+    }
+    // Hold long enough for WebGPU storage upload + a few compute frames after resize/warp.
+    this.positionHoldUntil[index] = performance.now() + 600;
   }
 
   /** Teleport an agent and zero their current velocity to avoid sliding. */
@@ -953,6 +1034,48 @@ export class CharacterManager {
     if (this.isLoaded) {
       this.cleanupInstances();
       this.initInstances();
+    }
+  }
+
+  /**
+   * Soft gray tint for idle/waiting mirror agents. Restores base color when cleared.
+   * Does not rebuild instances — only updates the color buffer.
+   */
+  public setPresenceDim(index: number, dimmed: boolean): void {
+    if (!this.colorAttribute || !this.baseColorArray) return;
+    if (index < 0 || index >= this.instanceCount) return;
+    this.presenceDimmed[index] = dimmed;
+
+    const arr = this.colorAttribute.array as Float32Array;
+    const br = this.baseColorArray[index * 3];
+    const bg = this.baseColorArray[index * 3 + 1];
+    const bb = this.baseColorArray[index * 3 + 2];
+    if (dimmed) {
+      // Strong dulling — waiting agents read as muted vs saturated workers.
+      const gray = 0.58;
+      const t = 0.82;
+      arr[index * 3] = br * (1 - t) + gray * t;
+      arr[index * 3 + 1] = bg * (1 - t) + gray * t;
+      arr[index * 3 + 2] = bb * (1 - t) + gray * t;
+    } else {
+      // Slight saturation boost when actively working/thinking.
+      const avg = (br + bg + bb) / 3;
+      const boost = 1.22;
+      arr[index * 3] = Math.min(1, avg + (br - avg) * boost);
+      arr[index * 3 + 1] = Math.min(1, avg + (bg - avg) * boost);
+      arr[index * 3 + 2] = Math.min(1, avg + (bb - avg) * boost);
+    }
+    this.colorAttribute.needsUpdate = true;
+  }
+
+  /** Re-apply dim flags after a color rebuild (roster refresh). */
+  public reapplyPresenceDims(flags: ReadonlyMap<number, boolean> | Record<number, boolean>): void {
+    const entries =
+      flags instanceof Map ? flags.entries() : Object.entries(flags).map(([k, v]) => [Number(k), v] as const);
+    for (const [index, dimmed] of entries) {
+      if (!dimmed) continue;
+      this.presenceDimmed[index] = false; // force write
+      this.setPresenceDim(index, true);
     }
   }
 }

@@ -89,6 +89,8 @@ export class CharacterController implements ICharacterDriver {
   private cruiseSpeedMult: Float32Array;
   /** Per-agent walk start/stop gate (Wave 1 locomotion presence). */
   private gaitGates: GaitGate[] = [];
+  /** Deferred actions that wait for sit→stand to finish (smooth leave-seat). */
+  private afterStand: Array<(() => void) | null> = [];
   private readonly _sepPos = new THREE.Vector3();
   private readonly _sitPos = new THREE.Vector3();
   private readonly _sitForward = new THREE.Vector3();
@@ -106,6 +108,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(count);
     this.sitIntents = new Array(count).fill(null);
     this.sitMotions = new Array(count).fill(null);
+    this.afterStand = new Array(count).fill(null);
     this.gaitGates = CharacterController.buildGaitGates(count);
 
     const stateBuffer = characterManager.getAgentStateBuffer()!;
@@ -187,8 +190,10 @@ export class CharacterController implements ICharacterDriver {
    * Non-interruptible states (e.g. 'sit_down') will queue the new state until ready.
    */
   public play(index: number, state: CharacterStateKey): void {
+    if (index < 0 || index >= this.characterManager.getCount()) return;
     // If transitioning away from a seated state, release any POIs
     const currentState = this.stateMachine.getState(index);
+    if (!currentState) return;
     const isCurrentlySeated = currentState === 'sit_idle' || currentState === 'sit_work' || currentState === 'sit_down';
     const isNewStateSeated = state === 'sit_idle' || state === 'sit_work' || state === 'sit_down';
 
@@ -226,6 +231,15 @@ export class CharacterController implements ICharacterDriver {
     fromPosition?: THREE.Vector3,
     targetOrientation?: THREE.Quaternion,
   ): boolean {
+    if (this.needsStandBeforeMove(index)) {
+      this.ensureStandingThen(index, () => {
+        this.moveTo(index, target, arrivalState, onArrival, fromPosition, targetOrientation);
+      });
+      return true;
+    }
+
+    this.afterStand[index] = null;
+
     let from: THREE.Vector3;
 
     if (fromPosition) {
@@ -241,11 +255,20 @@ export class CharacterController implements ICharacterDriver {
       );
     }
 
-    const path = this.navMesh.findPath(from, target);
+    let path = this.navMesh.findPath(from, target);
 
     if (path.length === 0) {
-      // Emergency Teleport: If the target is valid on the navmesh but we can't find a path
-      // (likely because the character is stuck outside the navmesh bounds), teleport directly.
+      // Retry once from a projected foothold — agents often sit a hair off-mesh.
+      const snapped = from.clone();
+      if (this.navMesh.projectOntoNavMesh(snapped)) {
+        this.characterManager.setPositionAndZeroVelocity(index, snapped);
+        from = snapped;
+        path = this.navMesh.findPath(from, target);
+      }
+    }
+
+    if (path.length === 0) {
+      // Emergency Teleport: only as last resort for the player when still stuck.
       if (index === getActiveAgentSet().user.index) {
         this.characterManager.setPosition(index, target);
         if (targetOrientation) {
@@ -338,8 +361,28 @@ export class CharacterController implements ICharacterDriver {
     onArrival?: (index: number) => void,
     fromPosition?: THREE.Vector3,
   ): boolean {
-    // Pre-arm sit sequence before async arrival / blend completes.
-    this.stateMachine.prepareSitDown(index, finalState);
+    // Already seated at this exact POI — don't restart sit_down (avoids glitch).
+    const held = this.poiManager.getPoi(poi.id);
+    const cur = this.stateMachine.getState(index);
+    if (
+      held?.occupiedBy === index &&
+      (cur === 'sit_idle' || cur === 'sit_work' || cur === 'sit_down')
+    ) {
+      if (cur === 'sit_idle' || cur === 'sit_work') {
+        if (cur !== finalState) this.play(index, finalState);
+      }
+      onArrival?.(index);
+      return true;
+    }
+
+    if (this.needsStandBeforeMove(index)) {
+      this.ensureStandingThen(index, () => {
+        this.walkToSitPoi(index, poi, finalState, onArrival, fromPosition);
+      });
+      return true;
+    }
+
+    this.afterStand[index] = null;
 
     let from: THREE.Vector3;
     if (fromPosition) {
@@ -354,13 +397,46 @@ export class CharacterController implements ICharacterDriver {
       );
     }
 
-    const path = this.navMesh.findPath(from, poi.position);
+    // Chairs / sofa holes leave agents off-mesh — snap foothold or walks never start.
+    const snapped = from.clone();
+    if (this.navMesh.projectOntoNavMesh(snapped)) {
+      if (snapped.distanceToSquared(from) > 0.0025) {
+        this.characterManager.setPositionAndZeroVelocity(index, snapped);
+      }
+      from = snapped;
+    }
+
+    const approach =
+      this.navMesh.findWalkableApproach(poi.position) ?? poi.position.clone();
+
+    // Already next to the seat — skip pathfinding and blend into the sit pose.
+    if (from.distanceTo(approach) <= 0.55 || from.distanceTo(poi.position) <= 0.65) {
+      this.stateMachine.prepareSitDown(index, finalState);
+      this.clearSitArrival(index);
+      this.sitIntents[index] = {
+        approachTarget: from.clone(),
+        seatPos: poi.position.clone(),
+        seatQuat: poi.quaternion.clone(),
+        alignOrientation: !poi.id.startsWith('area'),
+        onArrival,
+      };
+      this.poiManager.releaseAll(index);
+      this.poiManager.occupy(poi.id, index);
+      this.beginSitSeatBlend(index);
+      return true;
+    }
+
+    let path = this.navMesh.findPath(from, approach);
+    if (path.length === 0) {
+      path = this.navMesh.findPath(from, poi.position);
+    }
     if (path.length === 0) return false;
 
-    // Keep last node on-mesh when the chair POI is off-mesh (no furniture cutting).
-    if (this.navMesh.isPointOnNavMesh(poi.position)) {
-      path[path.length - 1] = poi.position.clone();
-    }
+    // Prefer on-mesh approach as the final waypoint (never route into the chair hole).
+    path[path.length - 1] = approach.clone();
+
+    // Pre-arm sit only after a real path exists (avoids leaked sit targets on failed walks).
+    this.stateMachine.prepareSitDown(index, finalState);
 
     const approachTarget = path[path.length - 1].clone();
 
@@ -698,7 +774,43 @@ export class CharacterController implements ICharacterDriver {
     this.lastDelta = delta;
     this.characterManager.update(delta, renderer);
     this.stateMachine.update(delta, this);
+    this.tickAfterStand();
     this.tickGaitGates(delta);
+  }
+
+  private isSeatedState(state: CharacterStateKey): boolean {
+    return state === 'sit_idle' || state === 'sit_work' || state === 'sit_down';
+  }
+
+  private needsStandBeforeMove(index: number): boolean {
+    return this.isSeatedState(this.stateMachine.getState(index));
+  }
+
+  /**
+   * Play stand when seated, then run `action` once the agent is upright.
+   * Prevents sit→walk pops when presence relocates agents.
+   */
+  public ensureStandingThen(index: number, action: () => void): void {
+    const cur = this.stateMachine.getState(index);
+    if (this.isSeatedState(cur) || cur === 'stand') {
+      this.afterStand[index] = action;
+      if (this.isSeatedState(cur)) this.play(index, 'stand');
+      return;
+    }
+    this.afterStand[index] = null;
+    action();
+  }
+
+  private tickAfterStand(): void {
+    for (let i = 0; i < this.afterStand.length; i++) {
+      const fn = this.afterStand[i];
+      if (!fn) continue;
+      const cur = this.stateMachine.getState(i);
+      // Wait until the get-up clip finishes (stand → idle).
+      if (cur === 'stand' || this.isSeatedState(cur)) continue;
+      this.afterStand[i] = null;
+      fn();
+    }
   }
 
   /**
@@ -945,6 +1057,7 @@ export class CharacterController implements ICharacterDriver {
     this.pathAgents[index].cancel();
     this.clearSitArrival(index);
     this.arrivalCallbacks[index] = undefined;
+    this.afterStand[index] = null;
     this.gaitGates[index]?.reset();
     this.setPhysicsMode(index, AgentBehavior.IDLE);
   }
@@ -983,6 +1096,36 @@ export class CharacterController implements ICharacterDriver {
     });
   }
 
+  /**
+   * Warp only the given NPC indices to free spawn slots.
+   * Existing agents keep their positions — used for incremental mirror spawn.
+   */
+  public warpIndicesToSpawn(npcIndices: number[]): void {
+    if (npcIndices.length === 0) return;
+    const spawnPois = this.poiManager.getPoisByPrefix('spawn');
+
+    for (const agentIndex of npcIndices) {
+      this.cancelMovement(agentIndex);
+      this.poiManager.releaseAll(agentIndex);
+
+      const free =
+        spawnPois.find((p) => p.occupiedBy === null) ??
+        spawnPois[agentIndex % Math.max(spawnPois.length, 1)];
+
+      if (free) {
+        this.characterManager.setPosition(agentIndex, free.position);
+        this.characterManager.setOrientation(agentIndex, free.quaternion);
+        this.poiManager.occupy(free.id, agentIndex);
+      }
+      this.play(agentIndex, 'happy');
+    }
+  }
+
+  /** Soft scale pop when mirror agents appear. */
+  public pulseSpawn(indices: number[]): void {
+    this.characterManager.pulseSpawn(indices);
+  }
+
   // ── Forwarded accessors ──────────────────────────────────────
 
   public getCPUPositions(): Float32Array | null {
@@ -1012,6 +1155,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.afterStand = new Array(newCount).fill(null);
     this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
@@ -1020,6 +1164,21 @@ export class CharacterController implements ICharacterDriver {
       this.walkFacing[i * 2 + 1] = 1;
     }
     this.stateMachine = new CharacterStateMachine(newCount);
+  }
+
+  /** Refresh colors/accessories without leaving agents at spawn. */
+  public refreshColorsPreservingPositions(): void {
+    const positions = this.characterManager.getCPUPositions();
+    const snapshot = positions ? Float32Array.from(positions) : null;
+    this.setColors();
+    if (!snapshot) return;
+    const count = this.characterManager.getCount();
+    for (let i = 0; i < count; i++) {
+      this.characterManager.setPosition(
+        i,
+        new THREE.Vector3(snapshot[i * 4], snapshot[i * 4 + 1], snapshot[i * 4 + 2]),
+      );
+    }
   }
 
   public setInstanceCount(count: number): void {
@@ -1033,6 +1192,7 @@ export class CharacterController implements ICharacterDriver {
     this.cruiseSpeedMult = CharacterController.buildCruiseSpeedMult(newCount);
     this.sitIntents = new Array(newCount).fill(null);
     this.sitMotions = new Array(newCount).fill(null);
+    this.afterStand = new Array(newCount).fill(null);
     this.gaitGates = CharacterController.buildGaitGates(newCount);
     this.arrivalCallbacks = [];
     for (let i = 0; i < newCount; i++) {
@@ -1083,6 +1243,19 @@ export class CharacterController implements ICharacterDriver {
     const from = this.getCPUPosition(index);
     const y = from?.y ?? 0;
     return this.moveTo(index, new THREE.Vector3(x, y, z), 'idle', undefined, from ?? undefined);
+  }
+
+  /**
+   * Sit immediately at the current pose (caller places the body on the seat).
+   * Plays sit_down → sit_idle/sit_work for a smooth settle without pathing.
+   */
+  public playSitAtPoi(index: number, finalState: 'sit_idle' | 'sit_work' = 'sit_idle'): void {
+    this.clearSitArrival(index);
+    this.afterStand[index] = null;
+    this.gaitGates[index]?.reset();
+    this.setPhysicsMode(index, AgentBehavior.SEATED);
+    this.stateMachine.prepareSitDown(index, finalState);
+    this.play(index, 'sit_down');
   }
 
   public getAnimationDuration(name: AnimationName): number {

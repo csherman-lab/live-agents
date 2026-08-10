@@ -31,7 +31,7 @@ export class WorldManager {
     dracoLoader.setDecoderPath(DRACO_LIB_PATH);
     loader.setDRACOLoader(dracoLoader);
     const officeGltf = await loader.loadAsync(
-      `${import.meta.env.BASE_URL}models/office.glb?v=161`
+      `${import.meta.env.BASE_URL}models/office.glb?v=162`
     );
     this.office = officeGltf.scene;
     this.scene.add(this.office);
@@ -70,6 +70,30 @@ export class WorldManager {
 
     // Extract Points of Interest
     this.poiManager.loadFromGlb(this.office);
+    this.ensureCompanionLoungeSofa();
+  }
+
+  /**
+   * Clone the lounge sofa toward the NW chairs so a full Cursor swarm can sit
+   * without looking like they're floating on empty floor.
+   */
+  private ensureCompanionLoungeSofa(): void {
+    if (!this.office) return;
+    if (this.office.getObjectByName('static-sofa-companion')) return;
+
+    let source: THREE.Object3D | null = null;
+    this.office.traverse((child) => {
+      if (source) return;
+      if (child.name.toLowerCase() === 'static-sofa') source = child;
+    });
+    if (!source) return;
+
+    const clone = source.clone(true);
+    clone.name = 'static-sofa-companion';
+    // Face the open floor near the NW lounge chairs (Three XZ ≈ Blender XY).
+    clone.position.set(-2.05, 0, 3.95);
+    clone.rotation.set(0, Math.PI / 2, 0);
+    this.office.add(clone);
   }
 
   public updateThemeColor(color: string): void {

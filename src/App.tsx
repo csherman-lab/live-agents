@@ -12,6 +12,8 @@ import TeamSwitchModal from './interface/TeamSwitchModal';
 import { useUiStore } from './integration/store/uiStore';
 import { useKeyboardShortcuts } from './integration/hooks/useKeyboardShortcuts';
 import { useThemeSync } from './integration/hooks/useThemeSync';
+import { usePresenceSync, injectMockSwarm, enterAdvancedMode } from './integration/presence/usePresenceSync';
+import { usePresenceStore } from './integration/presence/presenceStore';
 import { toast } from './integration/store/toastStore';
 import { enterWorkspace } from './integration/enterWorkspace';
 import { getTextModels, normalizeProviderId } from './core/llm/constants';
@@ -27,6 +29,7 @@ const VisualConfigurator = React.lazy(() =>
   import('./interface/VisualConfigurator/VisualConfigurator').then((m) => ({ default: m.VisualConfigurator }))
 );
 const OnboardingOverlay = React.lazy(() => import('./interface/OnboardingOverlay'));
+const CompanionTip = React.lazy(() => import('./interface/CompanionTip'));
 const SettingsScreen = React.lazy(() => import('./interface/SettingsScreen'));
 const InfoModal = React.lazy(() => import('./interface/InfoModal'));
 const ShortcutsModal = React.lazy(() => import('./interface/ShortcutsModal'));
@@ -46,21 +49,17 @@ const App: React.FC = () => {
   const [sceneReady, setSceneReady] = useState(false);
   const [sceneError, setSceneError] = useState(false);
   const { isLogOpen, isKanbanOpen, setIsResizing, viewMode, setViewMode } = useCoreStore();
-  const { isSettingsOpen, isAboutOpen, isShortcutsOpen, setSettingsOpen, setAboutOpen, setShortcutsOpen, setDemoMode, llmConfig, isDemoMode } = useUiStore();
+  const { isSettingsOpen, isAboutOpen, isShortcutsOpen, setSettingsOpen, setAboutOpen, setShortcutsOpen, llmConfig } = useUiStore();
+  const mirrorMode = usePresenceStore((s) => s.mirrorMode);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [kanbanHeight, setKanbanHeight] = useState(220);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // Full intro only when replaying from Settings — cold open uses CompanionTip.
 
   useEffect(() => {
     const provider = normalizeProviderId(useUiStore.getState().llmConfig.provider);
     useCoreStore.setState({ availableModels: [...getTextModels(provider)] });
-  }, []);
-
-  useEffect(() => {
-    import('./interface/OnboardingOverlay').then((m) => {
-      if (m.shouldShowOnboarding()) setShowOnboarding(true);
-    });
   }, []);
 
   const isOverview = viewMode === 'overview';
@@ -107,8 +106,28 @@ const App: React.FC = () => {
     canvasRef.current = node;
     if (!node) return;
 
+    const markReady = () => {
+      const manager = managerRef.current;
+      if (!manager) return;
+      setSceneManager(manager);
+      setSceneReady(true);
+      setSceneError(false);
+    };
+
     if (managerRef.current) {
-      managerRef.current.reparentTo(node);
+      const existing = managerRef.current;
+      existing.reparentTo(node);
+      // Remounts (overview ↔ office) bump init generation without recreating the scene.
+      // Always re-sync React ready state from the live manager promise.
+      void existing.ready.then(
+        () => markReady(),
+        () => {
+          if (managerRef.current === existing) {
+            setSceneError(true);
+            setSceneReady(false);
+          }
+        },
+      );
       return;
     }
 
@@ -116,6 +135,7 @@ const App: React.FC = () => {
       void initPromiseRef.current.then(() => {
         if (managerRef.current && canvasRef.current === node) {
           managerRef.current.reparentTo(node);
+          void managerRef.current.ready.then(() => markReady());
         }
       });
       return;
@@ -132,7 +152,7 @@ const App: React.FC = () => {
         import('./simulation/SceneManager'),
       ]);
 
-      if (generation !== initGenerationRef.current) return;
+      if (generation !== initGenerationRef.current) return null;
 
       const supported = await checkWebGPUSupport();
       if (!supported) {
@@ -140,7 +160,7 @@ const App: React.FC = () => {
       }
 
       const container = canvasRef.current;
-      if (!container || managerRef.current || generation !== initGenerationRef.current) return;
+      if (!container || managerRef.current || generation !== initGenerationRef.current) return null;
 
       const manager = new SceneManager(container);
       managerRef.current = manager;
@@ -148,12 +168,19 @@ const App: React.FC = () => {
 
       await withTimeout(manager.ready, 45000, '3D workspace initialization timed out');
 
-      if (generation !== initGenerationRef.current || managerRef.current !== manager) return;
+      if (managerRef.current !== manager) return null;
+      return manager;
     })()
-      .then(() => {
-        if (generation !== initGenerationRef.current || !managerRef.current) return;
-        setSceneReady(true);
-        setSceneError(false);
+      .then((manager) => {
+        // Prefer the live manager over generation — canvas remounts invalidate generation
+        // without disposing the scene, which previously left the loading overlay stuck forever.
+        if (manager && managerRef.current === manager) {
+          markReady();
+          return;
+        }
+        if (managerRef.current) {
+          void managerRef.current.ready.then(() => markReady());
+        }
       })
       .catch((err) => {
         if (generation !== initGenerationRef.current) return;
@@ -191,8 +218,14 @@ const App: React.FC = () => {
   };
   const handleBackToOverview = () => setViewMode('overview');
   const handleExploreDemo = () => {
-    setDemoMode(true);
-    setViewMode('simulation');
+    usePresenceStore.getState().setProductMode('mirror');
+    injectMockSwarm();
+    enterWorkspace();
+  };
+
+  const enterAdvancedFromSettings = () => {
+    enterAdvancedMode();
+    setViewMode('design');
   };
 
   useKeyboardShortcuts({
@@ -202,6 +235,7 @@ const App: React.FC = () => {
   });
 
   useThemeSync();
+  usePresenceSync(sceneReady ? sceneManager : null);
 
   return (
     <SceneContext.Provider value={sceneManager}>
@@ -219,7 +253,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {isLogOpen && !isFullscreen && isSimulation && (
+          {isLogOpen && !isFullscreen && isSimulation && !mirrorMode && (
             <Suspense fallback={null}>
               <ActionLogPanel />
             </Suspense>
@@ -237,13 +271,17 @@ const App: React.FC = () => {
                       <div>
                         <div className="flex items-center gap-2 mb-1.5">
                           <span className="w-2 h-2 rounded-full bg-appleGreen live-dot" />
-                          <span className="text-[11px] font-semibold uppercase tracking-widest text-appleGreen">Live Preview</span>
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-appleGreen">
+                            Live Office
+                          </span>
                         </div>
                         <h2 className="text-[22px] font-bold tracking-tight text-[var(--apple-text)]">
-                          Agent Workspace
+                          Cursor Swarm
                         </h2>
                         <p className="text-[13px] mt-1 text-[var(--apple-text-secondary)]">
-                          Your team is active in the office
+                          {mirrorMode
+                            ? 'Your Cursor agents appear here as named workers'
+                            : 'Waiting for agents — or enter the office to explore'}
                         </p>
                       </div>
                     </div>
@@ -275,7 +313,7 @@ const App: React.FC = () => {
                 </Suspense>
               )}
 
-              {isKanbanOpen && !isFullscreen && isSimulation && (
+              {isKanbanOpen && !isFullscreen && isSimulation && !mirrorMode && (
                 <Suspense fallback={null}>
                   <>
                     <div
@@ -291,7 +329,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {!isFullscreen && isSimulation && (
+          {!isFullscreen && isSimulation && !mirrorMode && (
             <Suspense fallback={<PanelFallback label="Loading inspector…" />}>
               <InspectorPanel />
             </Suspense>
@@ -328,6 +366,10 @@ const App: React.FC = () => {
               setSettingsOpen(false);
               setShortcutsOpen(true);
             }}
+            onOpenAdvanced={() => {
+              setSettingsOpen(false);
+              enterAdvancedFromSettings();
+            }}
           />
           <InfoModal open={isAboutOpen} onClose={() => setAboutOpen(false)} />
           <ShortcutsModal open={isShortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -344,11 +386,17 @@ const App: React.FC = () => {
               }}
               onOpenTeams={() => {
                 setShowOnboarding(false);
-                setViewMode('design');
+                enterAdvancedFromSettings();
               }}
               onGoLive={handleGoLive}
               onExploreDemo={handleExploreDemo}
             />
+          </Suspense>
+        )}
+
+        {mirrorMode && !showOnboarding && (
+          <Suspense fallback={null}>
+            <CompanionTip onEnterOffice={handleGoLive} onMockSwarm={handleExploreDemo} />
           </Suspense>
         )}
       </div>

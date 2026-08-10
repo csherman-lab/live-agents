@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useCoreStore } from '../integration/store/coreStore';
 import { useActiveTeam } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
+import { usePresenceStore } from '../integration/presence/presenceStore';
 import InspectorPanel from './InspectorPanel';
 import UIOverlay from './UIOverlay';
 import TeamFlowModal from './TeamFlowModal';
@@ -33,6 +34,7 @@ const SimulationView: React.FC<SimulationViewProps> = ({
   const { selectedNpcIndex, activeAuditTaskId, setActiveAuditTaskId } = useUiStore();
   const { phase, resetProject } = useCoreStore();
   const activeSet = useActiveTeam();
+  const mirrorMode = usePresenceStore((s) => s.mirrorMode);
   const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
 
   React.useEffect(() => {
@@ -41,27 +43,35 @@ const SimulationView: React.FC<SimulationViewProps> = ({
 
   return (
     <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
-      {/* Simulation header bar */}
       <div className="h-[48px] border-b flex items-center justify-between px-5 backdrop-blur-xl shrink-0 app-bar">
         <div className="flex-1 flex items-center gap-4">
-          <button
-            onClick={() => setIsFlowModalOpen(true)}
-            className="flex items-center gap-3 hover:bg-black/[0.04] px-3 py-1.5 rounded-xl transition-apple active:scale-95 group"
-            title="View Team Flow"
-          >
-            <TeamBadge system={activeSet} />
-            <div className="w-7 h-7 rounded-lg border border-black/5 flex items-center justify-center text-zinc-400 group-hover:text-appleBlue group-hover:border-appleBlue/20 transition-apple">
-              <Eye size={13} />
+          {mirrorMode ? (
+            <div className="flex items-center gap-2 px-2">
+              <span className="text-[13px] font-semibold text-[var(--apple-text)]">Cursor Swarm</span>
+              <span className="text-[11px] font-medium text-emerald-500">Mirror</span>
             </div>
-          </button>
+          ) : (
+            <>
+              <button
+                onClick={() => setIsFlowModalOpen(true)}
+                className="flex items-center gap-3 hover:bg-black/[0.04] px-3 py-1.5 rounded-xl transition-apple active:scale-95 group"
+                title="View Team Flow"
+              >
+                <TeamBadge system={activeSet} />
+                <div className="w-7 h-7 rounded-lg border border-black/5 flex items-center justify-center text-zinc-400 group-hover:text-appleBlue group-hover:border-appleBlue/20 transition-apple">
+                  <Eye size={13} />
+                </div>
+              </button>
 
-          <TeamOutputBadge system={activeSet} className="hidden md:flex" />
+              <TeamOutputBadge system={activeSet} className="hidden md:flex" />
 
-          {phase === 'working' && (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/10 text-orange-600 text-[11px] font-semibold">
-              <Radio size={12} className="live-dot" />
-              Live
-            </div>
+              {phase === 'working' && (
+                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/10 text-orange-600 text-[11px] font-semibold">
+                  <Radio size={12} className="live-dot" />
+                  Live
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -75,9 +85,13 @@ const SimulationView: React.FC<SimulationViewProps> = ({
       </div>
 
       <SimulationPhaseBanner
-        onEndProject={() => {
-          resetProject();
-        }}
+        onEndProject={
+          mirrorMode
+            ? undefined
+            : () => {
+                resetProject();
+              }
+        }
       />
 
       <div ref={canvasRef} className="flex-1 min-h-0 relative overflow-hidden" style={{ background: 'var(--apple-bg)' }}>
@@ -87,14 +101,14 @@ const SimulationView: React.FC<SimulationViewProps> = ({
           <SceneLoadingOverlay visible={!sceneReady} />
         )}
         {!sceneError && <UIOverlay />}
-        {isFullscreen && selectedNpcIndex !== null && (
+        {!mirrorMode && isFullscreen && selectedNpcIndex !== null && (
           <div className="absolute top-4 right-4 bottom-4 w-96 z-50 pointer-events-none flex flex-col gap-4">
             <InspectorPanel isFloating />
           </div>
         )}
       </div>
 
-      {isFlowModalOpen && (
+      {!mirrorMode && isFlowModalOpen && (
         <TeamFlowModal
           isOpen={isFlowModalOpen}
           onClose={() => setIsFlowModalOpen(false)}
@@ -102,7 +116,7 @@ const SimulationView: React.FC<SimulationViewProps> = ({
         />
       )}
 
-      {activeAuditTaskId && (
+      {!mirrorMode && activeAuditTaskId && (
         <AuditModal
           isOpen={!!activeAuditTaskId}
           taskId={activeAuditTaskId}

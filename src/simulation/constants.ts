@@ -40,12 +40,10 @@ export const NAVMESH_ZONE = 'level';
 /**
  * Locomotion (GPU units / compute dispatch; ~frame at 60 Hz).
  *
- * Measured Walk (ref HEAD character.glb):
- *   duration ~0.333s → theoretical matched speed ≈ 0.68 u/s
- *
- * Live cruise targets a normal walk (~0.58 u/s), not the old calm ~0.32 crawl.
+ * Office span ~10u — cruise needs to feel brisk for a playable avatar, not a
+ * watch-only sim crawl. Target ≈ 1.4 u/s (about 2× prior “normal walk”).
  */
-export const AGENT_MOVE_SPEED = 0.0082;
+export const AGENT_MOVE_SPEED = 0.020;
 /** Multiplier applied while following nav waypoints. */
 export const AGENT_MOVE_GOTO_MULT = 1.18;
 /** Distance at which a GOTO waypoint is considered reached on GPU. */
@@ -53,7 +51,7 @@ export const AGENT_WAYPOINT_RADIUS = 0.15;
 
 /**
  * Watch locomotion — CPU path follow with ease + turn blend.
- * Cruise ≈ SPEED × GOTO_MULT × 60fps ≈ 0.58 u/s.
+ * Cruise ≈ SPEED × GOTO_MULT × 60fps ≈ 1.42 u/s.
  */
 export const AGENT_CRUISE_SPEED =
   AGENT_MOVE_SPEED * AGENT_MOVE_GOTO_MULT * 60;
@@ -65,28 +63,27 @@ export const AGENT_CRUISE_SPEED =
  */
 export const AGENT_CRUISE_VARIANCE = 0.08;
 /** World units from segment start/end where speed eases toward min scale. */
-export const AGENT_SEGMENT_EASE_DIST = 0.65;
-/** Floor on ease scale (never full-stop mid-segment). */
-export const AGENT_SEGMENT_MIN_SPEED_SCALE = 0.42;
+export const AGENT_SEGMENT_EASE_DIST = 0.35;
+/** Floor on ease scale (never full-stop mid-segment). Keep high so easement doesn't crawl. */
+export const AGENT_SEGMENT_MIN_SPEED_SCALE = 0.72;
 /** Extra ease-out within this distance of the final destination. */
-export const AGENT_ARRIVAL_EASE_DIST = 0.85;
+export const AGENT_ARRIVAL_EASE_DIST = 0.55;
 /**
  * Radians/sec yaw limit while walking (smooth, no snap).
- * Faster catch-up at the new ~0.58 u/s cruise so corners don't skate.
  */
-export const AGENT_TURN_RATE = 9.5;
+export const AGENT_TURN_RATE = 10.5;
 /**
  * While turning hard, slow a bit so feet don't skate sideways.
- * Slightly stronger slowdown paired with AGENT_TURN_RATE bump.
+ * Keep mild — strong turn slowdown was a big source of “still so slow.”
  */
-export const AGENT_TURN_SPEED_FACTOR = 0.36;
+export const AGENT_TURN_SPEED_FACTOR = 0.62;
 
 // ── Locomotion presence (Wave 1 — gait + stride sync) ─────────
 /**
  * Approximate world-units traveled per full Walk clip cycle at rate 1.
- * Tuned for ~0.58 u/s cruise × ~0.333s Walk ≈ one stride per cycle at rate≈1.
+ * ~1.42 u/s × ~0.333s Walk ≈ one stride per cycle at rate≈1.
  */
-export const WALK_STRIDE_LENGTH = 0.20;
+export const WALK_STRIDE_LENGTH = 0.47;
 /** Seconds of continuous pathing before switching idle → walk. */
 export const GAIT_COMMIT_TIME = 0.08;
 /** Seconds after path end before switching walk → idle. */
@@ -210,10 +207,10 @@ export const PARTITION_PUSH_BOXES: ReadonlyArray<{
  */
 /** XZ distance to the near-seat nav waypoint where CPU slowdown begins. */
 export const SIT_APPROACH_SLOW_DIST = 1.45;
-/** Base world units/sec during the last-meters slowdown (keeps pace with ~0.58 walk). */
-export const SIT_APPROACH_SPEED = 0.52;
+/** Base world units/sec during the last-meters slowdown (keeps pace with brisk walk). */
+export const SIT_APPROACH_SPEED = 1.05;
 /** Speed scale at the waypoint (1 → this) as distance falls to 0. */
-export const SIT_APPROACH_MIN_SPEED_SCALE = 0.38;
+export const SIT_APPROACH_MIN_SPEED_SCALE = 0.45;
 /** Seconds to ease from approach end into exact seat position/facing. */
 export const SIT_ARRIVAL_BLEND_DURATION = 0.42;
 /** Ease-out power for the seat-pose blend (1 = linear, 2 = quadratic out). */

@@ -1,6 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { AgentNode, MAX_AGENTS } from '../../data/agents';
 import { useCoreStore } from '../../integration/store/coreStore';
+import { usePresenceStore } from '../../integration/presence/presenceStore';
+import { useUiStore } from '../../integration/store/uiStore';
 import { CharacterStateKey, IAgentDriver, PoiDef } from '../../types';
 import { CharacterController } from '../CharacterController';
 import {
@@ -86,6 +88,11 @@ export class NpcAgentDriver implements IAgentDriver {
       return;
     }
 
+    // Cursor mirror: presence sync owns seating + work poses (no wander/desk fight).
+    if (usePresenceStore.getState().mirrorMode) {
+      return;
+    }
+
     // Never interrupt locomotion, chat poses, or an active nav path.
     // 'sit_down' / 'stand' are one-shot, non-interruptible transitions — let them finish.
     if (
@@ -110,7 +117,11 @@ export class NpcAgentDriver implements IAgentDriver {
     const activeTask = systemState.tasks.find(
       t => t.assignedAgentId === this.agentIndex && (t.status === 'in_progress' || t.status === 'on_hold' || t.status === 'scheduled')
     );
-    const isBusyWithSystem = !!activeTask;
+    const status = useUiStore.getState().agentStatuses[this.agentIndex];
+    const presenceBusy =
+      usePresenceStore.getState().mirrorMode &&
+      (status === 'working' || status === 'talking');
+    const isBusyWithSystem = !!activeTask || presenceBusy;
 
     // Detect busy→idle transition: kick the agent to move away immediately
     if (this.wasBusy && !isBusyWithSystem) {

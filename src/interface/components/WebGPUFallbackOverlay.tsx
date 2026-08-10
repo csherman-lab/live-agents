@@ -35,7 +35,11 @@ const WebGPUFallbackOverlay: React.FC<WebGPUFallbackOverlayProps> = ({
           3D workspace unavailable
         </p>
         <p className="text-[12px] mt-1.5 leading-relaxed text-[var(--apple-text-secondary)]">
-          WebGPU is required for the office view. Open in Chrome, Edge, or Safari 18+, or use Command Center without 3D.
+          WebGPU is required for the office view. In Chrome, open{' '}
+          <span className="font-mono text-[11px]">chrome://gpu</span> and confirm WebGPU is
+          available, then reload this page at{' '}
+          <span className="font-mono text-[11px]">localhost:3000</span>. Cursor&apos;s side
+          browser may work even when system Chrome needs a flag enabled.
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2 mt-1">

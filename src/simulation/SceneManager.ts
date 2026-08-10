@@ -15,6 +15,20 @@ import { AgentSimulation } from './core/AgentSimulation';
 import { useCoreStore } from '../integration/store/coreStore';
 import { getActiveAgentSet, useTeamStore } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
+import {
+  CURSOR_MIRROR_SET_ID,
+  getMirrorNpcAgents,
+} from '../integration/presence/buildMirrorSystem';
+import { usePresenceStore } from '../integration/presence/presenceStore';
+import type { PresenceBehavior } from '../integration/presence/mapPresenceBehavior';
+import { assignMirrorSeatNear } from '../integration/presence/assignMirrorSeat';
+import {
+  MirrorPresenceDirector,
+  mirrorPlacementKey,
+} from '../integration/presence/MirrorPresenceDirector';
+import {
+  shouldIgnoreCoreTaskLocomotion,
+} from '../integration/presence/mirrorLocomotion';
 import { AgentBehavior, CharacterStateKey, ChatMessage } from '../types';
 import {
   BUBBLE_Y_OFFSET,
@@ -62,6 +76,10 @@ export class SceneManager {
   private simulation: AgentSimulation | null = null;
 
   private lastAgentSetId: string | null = null;
+  /** Cursor companion intent / hysteresis (walks executed by SceneManager helpers). */
+  private mirrorDirector = new MirrorPresenceDirector();
+  private mirrorRetryAccum = 0;
+  private mirrorDimmed = new Map<number, boolean>();
   /** Camera follow target; kept in sync with uiStore.selectedNpcIndex (null → player). */
   private selectedIndex: number | null = null;
   private selectionRing: SelectionRing | null = null;
@@ -166,6 +184,8 @@ export class SceneManager {
           });
           
           if (!hasChange) return;
+          // Cursor companion owns seating — leftover Advanced tasks must not yank agents to desks.
+          if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
 
           const onHold = myTasks.find(t => t.status === 'on_hold');
           const inProgress = myTasks.find(t => t.status === 'in_progress');
@@ -190,6 +210,7 @@ export class SceneManager {
       if (this.isDisposed) return;
 
       await this.worldManager.load();
+      this.ensureMirrorStagingPois();
       await this.characterManager.load();
       if (this.isDisposed) return;
 
@@ -660,6 +681,17 @@ export class SceneManager {
 
     const hasAmbient = !!(this.ambientSession?.isActive || this.ambientMeetupPending);
 
+    // Cursor companion owns body language — no ambient social meetups/notices.
+    if (usePresenceStore.getState().mirrorMode) {
+      if (this.ambientSession?.isActive) this._endAmbientSession();
+      this.mirrorRetryAccum += delta;
+      if (this.mirrorRetryAccum >= 0.5) {
+        this.mirrorRetryAccum = 0;
+        this.retryUnsatisfiedMirrorPlacements();
+      }
+      return;
+    }
+
     const actions = this.socialDirector.update(delta, {
       agents,
       playerIndex: player,
@@ -724,6 +756,29 @@ export class SceneManager {
 
   /** DEV: dump presence sessions for QA. */
   public getPresenceDebug() {
+    const agents = getMirrorNpcAgents(getActiveAgentSet()).map((a) => {
+      const snap = this.mirrorDirector.snapshot(a.index);
+      const desired = this.mirrorDirector.getDesired(a.index);
+      const active = this.mirrorDirector.getActive(a.index);
+      const pos = this.controller?.getCPUPosition(a.index);
+      return {
+        index: a.index,
+        name: a.name,
+        state: this.controller?.getState(a.index),
+        pathing: this.controller ? this.isMirrorPathing(a.index) : false,
+        desired: desired ? `${desired.placement}:${desired.characterState}` : null,
+        active: active ? `${active.placement}:${active.characterState}` : null,
+        pending: snap.pending
+          ? `${snap.pending.placement}:${snap.pending.characterState}`
+          : null,
+        inFlight: snap.inFlight,
+        arrived: snap.arrived,
+        holdUntil: snap.holdUntil,
+        failCount: snap.failCount,
+        atPlacement: active ? this.isAtMirrorPlacement(a.index, active) : false,
+        pos: pos ? { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2) } : null,
+      };
+    });
     return {
       playerChat: this.playerChatSession?.isActive
         ? { participants: this.playerChatSession.participants, roles: this.playerChatSession.participants.map((i) => this.playerChatSession!.roleOf(i)) }
@@ -732,6 +787,9 @@ export class SceneManager {
         ? { participants: this.ambientSession.participants, talking: this.ambientTalking }
         : null,
       meetup: this.ambientMeetupPending,
+      agents,
+      lounge: this.poiManager.getPoisByPrefix('sit_idle').filter((p) => /^sit_idle-\d+$/.test(p.id)).map((p) => ({ id: p.id, occupiedBy: p.occupiedBy })),
+      desks: this.poiManager.getPoisByPrefix('sit_work').map((p) => ({ id: p.id, occupiedBy: p.occupiedBy })),
     };
   }
 
@@ -767,11 +825,453 @@ export class SceneManager {
       const playerIndex = activeSet.user.index;
       this.driverManager.dispose();
       this.driverManager.registerPlayer(playerIndex);
-      getAllAgents(activeSet).forEach((a) => {
+      const npcs =
+        activeSet.id === CURSOR_MIRROR_SET_ID
+          ? getMirrorNpcAgents(activeSet)
+          : getAllAgents(activeSet);
+      npcs.forEach((a) => {
         if (a.index !== playerIndex) this.driverManager!.registerNpc(a.index, a);
       });
     }
   }
+
+  /** Rebuild simulation + drivers for a live mirror roster without changing team id. */
+  public applyAgentSet(activeSet: AgenticSystem): void {
+    this.applyMirrorRoster(activeSet, {
+      warpIndices: getMirrorNpcAgents(activeSet).map((a) => a.index),
+    });
+  }
+
+  /**
+   * Apply a mirror roster. Only warps the given indices (new spawns).
+   * Pass empty warpIndices when count changed but existing agents should keep seats
+   * (caller decides which indices are new).
+   */
+  public applyMirrorRoster(
+    activeSet: AgenticSystem,
+    options: { warpIndices?: number[]; empty?: boolean } = {},
+  ): void {
+    this.lastAgentSetId = activeSet.id;
+    this.reinitializeSimulation(activeSet);
+    this.worldManager?.updateThemeColor(activeSet.color);
+    if (!this.controller) return;
+
+    // Preserve positions across color buffer rebuild, then warp only new spawns.
+    this.controller.refreshColorsPreservingPositions();
+    this.characterManager.reapplyPresenceDims(this.mirrorDimmed);
+    const warp = options.warpIndices ?? [];
+    if (warp.length > 0) {
+      this.controller.warpIndicesToSpawn(warp);
+      this.controller.pulseSpawn(warp);
+      for (const i of warp) {
+        this.mirrorDirector.clearIndex(i);
+      }
+      // Spectator framing when new workers appear.
+      if (usePresenceStore.getState().mirrorMode) {
+        useUiStore.getState().setSelectedNpc(null);
+        this.stage.frameOfficeOverview(false);
+        this.parkMirrorPlayerOffstage(activeSet.user.index);
+      }
+    } else if (options.empty && usePresenceStore.getState().mirrorMode) {
+      useUiStore.getState().setSelectedNpc(null);
+      this.stage.frameOfficeOverview(false);
+      this.parkMirrorPlayerOffstage(activeSet.user.index);
+    }
+  }
+
+  /** Soft spawn pop for mirror agents. */
+  public pulseMirrorSpawn(indices: number[]): void {
+    this.controller?.pulseSpawn(indices);
+  }
+
+  /** Soft refresh for appearance edits — no driver rebuild, no teleport. */
+  public refreshMirrorAppearance(activeSet: AgenticSystem): void {
+    this.worldManager?.updateThemeColor(activeSet.color);
+    this.controller?.refreshColorsPreservingPositions();
+  }
+
+  /** Keep the unused player avatar out of the companion office (avoids ghost stacking). */
+  private parkMirrorPlayerOffstage(playerIndex: number): void {
+    if (!this.controller) return;
+    this.controller.cancelMovement(playerIndex);
+    this.poiManager.releaseAll(playerIndex);
+    const away = new THREE.Vector3(-12, 0, -12);
+    this.characterManager.setPositionAndZeroVelocity(playerIndex, away);
+    const buffer = this.controller.getAgentStateBuffer();
+    buffer?.setAlpha(playerIndex, 0);
+  }
+
+  /** Soft pose nudge for Cursor presence (thinking / done beats). */
+  public playPresencePose(index: number, state: CharacterStateKey): void {
+    if (!this.controller) return;
+    if (this.controller.getState(index) === 'walk') return;
+    if (this.controller.isPathing(index)) return;
+    this.controller.play(index, state);
+  }
+
+  /**
+   * Cursor companion body language:
+   * lead on stage; working specialists at desks; thinkers at whiteboard; idle on real lounge seats.
+   */
+  public applyMirrorPresence(index: number, behavior: PresenceBehavior): void {
+    if (!this.controller) return;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return;
+
+    // Always apply visual flags from the latest event.
+    this.setPresenceDim(index, behavior.dimmed);
+    this.controller.setSpeaking(index, behavior.speaking);
+
+    const cur = this.controller.getState(index);
+    const pathing = this.isMirrorPathing(index);
+    const blocking = cur === 'stand' || cur === 'sit_down';
+    const loco = this.mirrorDirector.setIntent(index, behavior, {
+      pathing,
+      blockingTransition: blocking,
+    });
+
+    this.tryMirrorPlacement(index, loco);
+    // Bubble follows latest presence intent (Working gated on arrival of active loco).
+    this.publishMirrorBubble(index, behavior);
+  }
+
+  /** Working bubble only after arrival — walking agents stay quiet. */
+  private publishMirrorBubble(index: number, behavior: PresenceBehavior): void {
+    const key = mirrorPlacementKey(behavior.placement, behavior.characterState);
+    const arrived = this.mirrorDirector.getArrived(index) === key;
+    const primary =
+      behavior.bubblePrimary === 'Working'
+        ? arrived
+          ? 'Working'
+          : ''
+        : behavior.bubblePrimary;
+    const prev = usePresenceStore.getState().agentStatusTexts;
+    if (prev[index] === primary) return;
+    usePresenceStore.getState().setAgentStatusTexts({ ...prev, [index]: primary });
+  }
+
+  private retryUnsatisfiedMirrorPlacements(): void {
+    for (const [index] of this.mirrorDirector.entries()) {
+      const cur = this.controller?.getState(index);
+      const pathing = this.isMirrorPathing(index);
+      const blocking = cur === 'stand' || cur === 'sit_down';
+      const promoted = this.mirrorDirector.promotePending(index, {
+        pathing,
+        blockingTransition: !!blocking,
+      });
+      const active = promoted ?? this.mirrorDirector.getActive(index);
+      if (!active) continue;
+      this.tryMirrorPlacement(index, active);
+      const latest = this.mirrorDirector.getDesired(index);
+      if (latest) this.publishMirrorBubble(index, latest);
+    }
+  }
+
+  private isMirrorPathing(index: number): boolean {
+    if (!this.controller) return false;
+    const cur = this.controller.getState(index);
+    return this.controller.isPathing(index) || cur === 'walk' || cur === 'stand' || cur === 'sit_down';
+  }
+
+  private isNearPoint(index: number, target: THREE.Vector3, radius = 0.95): boolean {
+    const p = this.controller?.getCPUPosition(index);
+    if (!p) return false;
+    const dx = p.x - target.x;
+    const dz = p.z - target.z;
+    return dx * dx + dz * dz <= radius * radius;
+  }
+
+  private mirrorBoardTarget(index: number): THREE.Vector3 {
+    const poi = this.poiManager.getPoi('area-board') || this.poiManager.getPoi('idle-area-boardroom');
+    const target = poi?.position.clone() ?? new THREE.Vector3(3.0, 0, -1.55);
+    const slot = Math.max(0, index - 1);
+    target.x += (slot % 3) * 0.55 - 0.55;
+    target.z += Math.floor(slot / 3) * 0.4;
+    this.navMesh.projectOntoNavMesh(target);
+    return target;
+  }
+
+  private mirrorStageTarget(index: number): THREE.Vector3 {
+    const poi = this.poiManager.getPoi('area-stage');
+    const target = poi?.position.clone() ?? new THREE.Vector3(-0.35, 0, 0.55);
+    if (index !== 1) {
+      const slot = Math.max(0, index - 2);
+      const angle = (slot * Math.PI * 2) / 5;
+      target.x += Math.cos(angle) * 0.55;
+      target.z += Math.sin(angle) * 0.55;
+    }
+    this.navMesh.projectOntoNavMesh(target);
+    return target;
+  }
+
+  private isAtMirrorPlacement(index: number, behavior: PresenceBehavior): boolean {
+    if (!this.controller) return false;
+    const cur = this.controller.getState(index);
+    if (behavior.placement === 'lounge') return cur === 'sit_idle';
+    if (behavior.placement === 'desk') return cur === 'sit_work';
+    if (behavior.placement === 'board') {
+      if (!(cur === 'look_around' || cur === 'talk' || cur === 'idle' || cur === 'happy')) return false;
+      return this.isNearPoint(index, this.mirrorBoardTarget(index), 1.15);
+    }
+    if (!(cur === 'talk' || cur === 'idle' || cur === 'look_around' || cur === 'happy')) return false;
+    return this.isNearPoint(index, this.mirrorStageTarget(index), 1.05);
+  }
+
+  /** Attempt locomotion toward desired placement. Arrival only when pose+place match. */
+  private tryMirrorPlacement(index: number, behavior: PresenceBehavior): boolean {
+    if (!this.controller) return false;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return false;
+
+    this.setPresenceDim(index, behavior.dimmed);
+    this.controller.setSpeaking(index, behavior.speaking);
+
+    const pos = this.controller.getCPUPosition(index);
+    const invalid =
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.z) ||
+      Math.abs(pos.x) > 18 ||
+      Math.abs(pos.z) > 18;
+    if (invalid) {
+      const spawn = this.poiManager.getPoisByPrefix('spawn')[0]?.position
+        ?? new THREE.Vector3(-3.1, 0, -4.4);
+      this.controller.cancelMovement(index);
+      this.characterManager.setPositionAndZeroVelocity(index, spawn.clone());
+      this.mirrorDirector.clearArrived(index);
+      this.mirrorDirector.clearInFlight(index);
+    }
+
+    const placementKey = mirrorPlacementKey(behavior.placement, behavior.characterState);
+    const pathing = this.isMirrorPathing(index);
+    const cur = this.controller.getState(index);
+
+    if (this.isAtMirrorPlacement(index, behavior)) {
+      this.mirrorDirector.markArrived(index, placementKey);
+      if (
+        (behavior.placement === 'lounge' || behavior.placement === 'desk') &&
+        (cur === 'sit_idle' || cur === 'sit_work') &&
+        cur !== behavior.characterState &&
+        (behavior.characterState === 'sit_idle' || behavior.characterState === 'sit_work')
+      ) {
+        this.controller.play(index, behavior.characterState);
+      } else if (
+        (behavior.placement === 'stage' || behavior.placement === 'board') &&
+        cur !== behavior.characterState &&
+        (cur === 'talk' || cur === 'idle' || cur === 'look_around' || cur === 'happy')
+      ) {
+        this.controller.play(index, behavior.characterState);
+      }
+      this.publishMirrorBubble(index, behavior);
+      return true;
+    }
+
+    this.mirrorDirector.clearArrived(index);
+    this.publishMirrorBubble(index, behavior);
+
+    // Already walking/standing toward this placement — let it finish.
+    if (pathing && this.mirrorDirector.getInFlight(index) === placementKey) return true;
+
+    // Wrong destination in progress — cancel walks (wait out stand/sit_down clips).
+    if (pathing) {
+      if (cur === 'stand' || cur === 'sit_down') return false;
+      this.controller.cancelMovement(index);
+      this.mirrorDirector.clearInFlight(index);
+    }
+
+    let started = false;
+    if (behavior.placement === 'lounge') {
+      started = this.sendNpcToLounge(index);
+    } else if (behavior.placement === 'desk') {
+      started = this.sendNpcToDesk(index);
+    } else if (behavior.placement === 'board') {
+      started = this.sendNpcToBoard(index, behavior.characterState);
+    } else {
+      started = this.sendNpcToStage(index, behavior.characterState);
+    }
+
+    if (started) this.mirrorDirector.markInFlight(index, placementKey);
+    else this.mirrorDirector.clearInFlight(index);
+    return started;
+  }
+
+  public setPresenceDim(index: number, dimmed: boolean): void {
+    this.mirrorDimmed.set(index, dimmed);
+    this.characterManager.setPresenceDim(index, dimmed);
+  }
+
+  /** Stage + whiteboard markers. Lounge seats come only from the office GLB. */
+  private ensureMirrorStagingPois(): void {
+    for (const id of [
+      'sit_idle-couch-a',
+      'sit_idle-couch-b',
+      'sit_idle-couch-c',
+      'sit_idle-couch-d',
+      'sit_idle-couch-e',
+      'sit_idle-couch-f',
+    ]) {
+      this.poiManager.removePoi(id);
+    }
+
+    if (!this.poiManager.getPoi('area-stage')) {
+      this.poiManager.addPoi({
+        id: 'area-stage',
+        // Open floor near the meeting table — reads as “center stage”, not a PC desk.
+        position: new THREE.Vector3(-0.35, 0, 0.55),
+        quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI),
+        arrivalState: 'idle',
+        occupiedBy: null,
+        label: 'Stage',
+      });
+    } else {
+      // Keep existing marker but nudge if it was the old corridor point.
+      const stage = this.poiManager.getPoi('area-stage');
+      if (stage && Math.abs(stage.position.x - 0.15) < 0.05 && Math.abs(stage.position.z + 0.35) < 0.05) {
+        stage.position.set(-0.35, 0, 0.55);
+      }
+    }
+
+    if (!this.poiManager.getPoi('area-board')) {
+      this.poiManager.addPoi({
+        id: 'area-board',
+        position: new THREE.Vector3(3.0, 0, -1.55),
+        quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI),
+        arrivalState: 'idle',
+        occupiedBy: null,
+        label: 'Whiteboard',
+      });
+    }
+  }
+
+  private sendNpcToLounge(index: number): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    const seats = this.poiManager
+      .getPoisByPrefix('sit_idle')
+      .filter((p) => /^sit_idle-\d+$/.test(p.id))
+      .map((p) => ({
+        id: p.id,
+        occupiedBy: p.occupiedBy,
+        x: p.position.x,
+        z: p.position.z,
+      }));
+    const from = this.controller.getCPUPosition(index);
+    const poiRef = from
+      ? assignMirrorSeatNear(seats, index, { x: from.x, z: from.z })
+      : seats[0] ?? null;
+    if (!poiRef) return false;
+    const poi = this.poiManager.getPoi(poiRef.id);
+    if (!poi) return false;
+
+    const cur = this.controller.getState(index);
+    if (poi.occupiedBy === index && (cur === 'sit_idle' || cur === 'sit_down')) return true;
+    if (poi.occupiedBy !== index) {
+      this.poiManager.releaseAll(index);
+      this.poiManager.occupy(poi.id, index);
+    }
+    const ok = this.controller.walkToPoi(index, poi.id);
+    if (!ok) {
+      if (poi.occupiedBy === index) this.poiManager.release(poi.id);
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToDesk(index: number): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    const desks = this.poiManager.getPoisByPrefix('sit_work').map((p) => ({
+      id: p.id,
+      occupiedBy: p.occupiedBy,
+      x: p.position.x,
+      z: p.position.z,
+    }));
+    const from = this.controller.getCPUPosition(index);
+    const poiRef = from
+      ? assignMirrorSeatNear(desks, index, { x: from.x, z: from.z })
+      : desks[0] ?? null;
+    if (!poiRef) return false;
+    const poi = this.poiManager.getPoi(poiRef.id);
+    if (!poi) return false;
+
+    const cur = this.controller.getState(index);
+    if (poi.occupiedBy === index && (cur === 'sit_work' || cur === 'sit_down')) return true;
+    if (poi.occupiedBy !== index) {
+      this.poiManager.releaseAll(index);
+      this.poiManager.occupy(poi.id, index);
+    }
+    const ok = this.controller.walkToPoi(index, poi.id);
+    if (!ok) {
+      if (poi.occupiedBy === index) this.poiManager.release(poi.id);
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToBoard(index: number, pose: CharacterStateKey): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    this.poiManager.releaseAll(index);
+    const target = this.mirrorBoardTarget(index);
+    const faceBoard = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const ok = this.controller.moveTo(index, target, pose, undefined, undefined, faceBoard);
+    if (!ok) {
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToStage(index: number, pose: CharacterStateKey): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    this.poiManager.releaseAll(index);
+    const target = this.mirrorStageTarget(index);
+    const poi = this.poiManager.getPoi('area-stage');
+    const quat = poi?.quaternion;
+    const ok = this.controller.moveTo(index, target, pose, undefined, undefined, quat);
+    if (!ok) {
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  /** Pull agents out of sofa/desk nav holes so pathfinding can start. */
+  private ensureMirrorNavFoothold(index: number): void {
+    if (!this.controller) return;
+    const p = this.controller.getCPUPosition(index);
+    if (!p) return;
+
+    const canary = this.mirrorStageTarget(1);
+    const pathable = this.navMesh.isPointOnNavMesh(p) && this.navMesh.findPath(p, canary).length > 0;
+    if (pathable) return;
+
+    const snapped = p.clone();
+    if (this.navMesh.projectOntoNavMesh(snapped) && this.navMesh.findPath(snapped, canary).length > 0) {
+      this.characterManager.setPositionAndZeroVelocity(index, snapped);
+      return;
+    }
+    // Do not escape here — wait for consecutive walk failures via the director.
+  }
+
+  /** Soft recovery to a walkable spawn — never snap onto furniture. */
+  private forceMirrorEscape(index: number): void {
+    if (!this.controller) return;
+    this.controller.cancelMovement(index);
+    this.mirrorDirector.clearInFlight(index);
+    this.mirrorDirector.resetFails(index);
+    const spawns = this.poiManager.getPoisByPrefix('spawn');
+    const spawn = spawns[(Math.max(0, index - 1)) % Math.max(spawns.length, 1)] ?? spawns[0];
+    const foothold = (spawn?.position.clone() ?? new THREE.Vector3(-3.1, 0, -4.4));
+    this.navMesh.projectOntoNavMesh(foothold);
+    this.characterManager.setPositionAndZeroVelocity(index, foothold);
+  }
+
   public setCoreHandler(handler: ((npcIndex: number, text: string) => Promise<string | null>) | null): void {
     this.coreHandler = handler;
   }
@@ -783,13 +1283,14 @@ export class SceneManager {
     return lead?.brain || null;
   }
 
-  /** 
+  /**
    * SMART DESK ASSIGNMENT
-   * Attempts to find a work POI. If work-${index} is missing, it picks 
+   * Attempts to find a work POI. If work-${index} is missing, it picks
    * a desk from the 'sit_work' group based on the agent's unique index.
    */
   public setNpcWorking(index: number, working: boolean): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
     if (working) {
       const id = `sit_work-${index}`;
       let poi = this.poiManager.getPoi(id);
@@ -804,6 +1305,7 @@ export class SceneManager {
   
   public setNpcTalking(index: number, talking: boolean): void {
     if (!this.controller) return;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return;
     // Player chat session owns body language for its participants.
     if (this.playerChatSession?.isParticipant(index)) {
       if (talking) this.playerChatSession.setSpeaker(index);
@@ -823,6 +1325,7 @@ export class SceneManager {
 
   public moveNpcToBoardroom(index: number): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
     const poi = this.poiManager.getPoi('area-boardroom') || this.poiManager.getPoi('boardroom');
     if (poi) {
       this.controller.walkToPoi(index, poi.id, () => {
@@ -834,6 +1337,10 @@ export class SceneManager {
 
   public moveNpcToSpawn(index: number, onArrival?: () => void): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) {
+      onArrival?.();
+      return;
+    }
     const poi = this.poiManager.getPoi(`spawn-${index}`);
     if (poi) this.controller.moveTo(index, poi.position, 'idle', onArrival, undefined, poi.quaternion);
     else if (onArrival) onArrival();
@@ -906,7 +1413,8 @@ export class SceneManager {
 
     // Subtle non-pulsing ring under the player while the camera follows self (no NPC selected).
     if (this.playerRing) {
-      const showPlayerRing = this.selectedIndex === null && !isChatting;
+      const mirror = usePresenceStore.getState().mirrorMode;
+      const showPlayerRing = !mirror && this.selectedIndex === null && !isChatting;
       this.playerRing.update(showPlayerRing ? this.controller?.getCPUPosition(player) ?? null : null);
     }
 
@@ -921,11 +1429,16 @@ export class SceneManager {
 
     const npcScreenPositions: Record<number, { x: number; y: number }> = {};
     const rect = this.container.getBoundingClientRect();
+    const mirror = usePresenceStore.getState().mirrorMode;
     if (this.controller) {
       for (let i = 0; i < this.controller.getCount(); i++) {
+        // Hidden player avatar must not steal nameplates/bubbles in companion mode.
+        if (mirror && i === player) continue;
         const p = this.controller.getCPUPosition(i);
         if (p) {
           const s = p.clone(); s.y += BUBBLE_Y_OFFSET; s.project(this.stage.camera);
+          // Skip behind-camera / far projections that pin labels to wrong corners.
+          if (s.z < -1 || s.z > 1) continue;
           npcScreenPositions[i] = { x: (s.x * 0.5 + 0.5) * rect.width, y: (s.y * -0.5 + 0.5) * rect.height };
         }
       }
@@ -943,6 +1456,22 @@ export class SceneManager {
     if (!this.controller) return;
     const count = this.controller.getCount(), buffer = this.controller.getAgentStateBuffer();
     if (!buffer) return;
+    const player = getActiveAgentSet().user.index;
+    const mirror = usePresenceStore.getState().mirrorMode;
+
+    // Companion mode: hide the unused player avatar (it was ghost-stacking with Cursor).
+    if (mirror) {
+      buffer.setAlpha(player, 0);
+      for (let i = 0; i < count; i++) {
+        if (i === player) continue;
+        const cur = buffer.getAlpha(i);
+        if (Math.abs(cur - 1) > 0.01) {
+          buffer.setAlpha(i, THREE.MathUtils.lerp(cur, 1, Math.min(delta * 3.0, 1.0)));
+        }
+      }
+      return;
+    }
+
     for (let i = 0; i < count; i++) {
       let overlap = false;
       for (let j = 0; j < count; j++) {

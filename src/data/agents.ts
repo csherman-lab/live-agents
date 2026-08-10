@@ -4,6 +4,8 @@ import { DEFAULT_MODELS } from '../core/llm/constants';
 export const USER_ID = 'user';
 export const USER_NAME = 'User';
 export const MAX_AGENTS = 5;
+/** Soft cap for Cursor mirror swarms (GPU instances). */
+export const MAX_MIRROR_AGENTS = 16;
 export { USER_COLOR };
 export const DEFAULT_AGENTIC_SET_ID = 'creative-agency';
 export interface AgentNode {

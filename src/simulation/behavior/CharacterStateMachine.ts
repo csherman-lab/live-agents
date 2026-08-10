@@ -63,13 +63,21 @@ export class CharacterStateMachine {
 
   /** Request a state transition. Non-interruptible states silently reject new requests. */
   public transition(index: number, newState: CharacterStateKey, driver: ICharacterDriver): void {
-    const currentDef = STATE_MAP[this.currentState[index]];
+    if (index < 0 || index >= this.count) return;
+    const currentKey = this.currentState[index];
+    const currentDef = currentKey ? STATE_MAP[currentKey] : undefined;
+    if (!currentDef) {
+      // Index valid but state missing (resize race) — seed idle then continue.
+      this.currentState[index] = 'idle';
+      this.stateTimer[index] = 0;
+    }
+    const def = STATE_MAP[this.currentState[index]] ?? STATE_MAP.idle;
 
     // If current state is NOT interruptible, we can only transition if:
     // 1. The new state is ALSO non-interruptible (allows immediate override of busy states if logic requires)
     // 2. The loop has finished (timer <= 0)
     // For now, we follow the strict rule: if not interruptible and timer > 0, ignore.
-    if (!currentDef.interruptible && this.stateTimer[index] > 0) {
+    if (!def.interruptible && this.stateTimer[index] > 0) {
       // FIX: If we are trying to transition AWAY from a non-looping state,
       // and it hasn't finished yet, we allow it ONLY if the target is NOT the same state or the auto-next state.
       // This prevents the player from being truly "stuck" if they click several times during a brief animation.
@@ -95,7 +103,7 @@ export class CharacterStateMachine {
   public update(delta: number, driver: ICharacterDriver): void {
     for (let i = 0; i < this.count; i++) {
       const def = STATE_MAP[this.currentState[i]];
-      if (def.loop) continue;
+      if (!def || def.loop) continue;
 
       this.stateTimer[i] -= delta;
       if (this.stateTimer[i] <= 0) {
