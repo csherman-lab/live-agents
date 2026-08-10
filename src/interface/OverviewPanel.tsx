@@ -201,7 +201,9 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive }) => {
           </button>
 
           <p className="text-center text-[11px] pt-1" style={{ color: APPLE_TEXT_SECONDARY }}>
-            Any workspace: <code className="font-mono text-[10px]">npm run bridge:install</code> then keep this app running.
+            Live from any workspace:{' '}
+            <code className="font-mono text-[10px]">npm run bridge:install</code>
+            {' '}· keep <code className="font-mono text-[10px]">npm run dev</code> running
           </p>
         </div>
 

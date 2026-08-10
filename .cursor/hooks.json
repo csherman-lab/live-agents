@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "sessionEnd": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "subagentStart": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "subagentStop": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "afterAgentThought": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "preToolUse": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "postToolUse": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ],
+    "stop": [
+      { "command": "node .cursor/hooks/emit-presence.mjs" }
+    ]
+  }
+}
