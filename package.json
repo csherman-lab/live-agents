@@ -20,7 +20,9 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "check": "npm run lint && npm run test && npm run build",
-    "assets:generate": "blender -b --python scripts/blender/generate_all.py"
+    "assets:generate": "blender -b --python scripts/blender/generate_all.py",
+    "bridge:install": "node tools/cursor-bridge/install-user-hooks.mjs",
+    "bridge:smoke": "node tools/cursor-bridge/smoke.mjs"
   },
   "dependencies": {
     "@google/genai": "1.48.0",
