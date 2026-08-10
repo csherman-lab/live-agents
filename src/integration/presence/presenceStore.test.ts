@@ -30,6 +30,31 @@ describe('presenceStore', () => {
     expect(listPresenceAgents()).toHaveLength(0);
   });
 
+  it('lead remove via applyEvent clears children (session end)', () => {
+    usePresenceStore.getState().applyEvent(
+      createPresenceEvent({ agentId: 'c1', name: 'Cursor', state: 'thinking', ts: 1 }),
+    );
+    usePresenceStore.getState().applyEvent(
+      createPresenceEvent({
+        agentId: 's1',
+        name: 'Explore',
+        state: 'working',
+        parentId: 'c1',
+        ts: 2,
+      }),
+    );
+    usePresenceStore.getState().applyEvent(
+      createPresenceEvent({
+        agentId: 'c1',
+        name: 'Cursor',
+        state: 'done',
+        op: 'remove',
+        ts: 3,
+      }),
+    );
+    expect(listPresenceAgents()).toHaveLength(0);
+  });
+
   it('removeTree clears children when parent is removed', () => {
     usePresenceStore.getState().upsert(
       createPresenceEvent({ agentId: 'lead', name: 'Lead', state: 'working', ts: 1 }),
