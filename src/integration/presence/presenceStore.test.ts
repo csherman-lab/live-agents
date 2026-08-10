@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPresenceEvent } from './presenceTypes';
 import { listPresenceAgents, usePresenceStore } from './presenceStore';
+import { shouldApplyHubPresenceEvent } from './presenceLiveGate';
 
 describe('presenceStore', () => {
   beforeEach(() => {
@@ -168,5 +169,21 @@ describe('presenceStore', () => {
     );
     expect(listPresenceAgents()).toHaveLength(0);
     expect(usePresenceStore.getState().demoSwarmActive).toBe(false);
+  });
+
+  it('clear() exits the demo swarm one-way door: empties roster and re-opens the hub gate', () => {
+    usePresenceStore.getState().setDemoSwarmActive(true);
+    usePresenceStore.getState().applyEvent(
+      createPresenceEvent({ agentId: 'cursor-lead', name: 'Cursor', state: 'working' }),
+    );
+    expect(listPresenceAgents()).toHaveLength(1);
+    expect(shouldApplyHubPresenceEvent(usePresenceStore.getState().demoSwarmActive)).toBe(false);
+
+    usePresenceStore.getState().clear();
+
+    expect(usePresenceStore.getState().demoSwarmActive).toBe(false);
+    expect(listPresenceAgents()).toHaveLength(0);
+    // Hub/SSE events apply again once the demo swarm no longer owns the roster.
+    expect(shouldApplyHubPresenceEvent(usePresenceStore.getState().demoSwarmActive)).toBe(true);
   });
 });

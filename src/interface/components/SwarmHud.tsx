@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, Radio, Users, Wifi, WifiOff } from 'lucide-react';
-import { injectMockSwarm } from '../../integration/presence/usePresenceSync';
+import { Activity, Radio, Users, Wifi, WifiOff, X } from 'lucide-react';
+import { exitDemoSwarm, injectMockSwarm } from '../../integration/presence/usePresenceSync';
 import { mirrorHudRows } from '../../integration/presence/mirrorLocomotion';
 import { resolveMirrorHudStatus } from '../../integration/presence/mirrorHudStatus';
 import {
@@ -18,6 +18,9 @@ const SwarmHud: React.FC = () => {
   const agents = usePresenceStore((s) => s.agents);
   const agentCount = Object.keys(agents).length;
   const lastEventAt = usePresenceStore((s) => s.lastEventAt);
+  const workingCount = usePresenceStore(
+    (s) => Object.values(s.agents).filter((a) => a.state === 'working' || a.state === 'thinking').length,
+  );
   const hudRows = mirrorHudRows(listPresenceAgents());
   const [now, setNow] = useState(Date.now());
 
@@ -26,13 +29,10 @@ const SwarmHud: React.FC = () => {
     return () => window.clearInterval(t);
   }, []);
 
+  // All hooks above this line — the early return below must never change hook count/order.
   if (!mirrorMode) return null;
 
   const hubUp = hubOnline || connected;
-  const hubPending = !hubUp && !hubHealth;
-  const workingCount = usePresenceStore(
-    (s) => Object.values(s.agents).filter((a) => a.state === 'working' || a.state === 'thinking').length,
-  );
 
   const status = resolveMirrorHudStatus({
     demoSwarmActive,
@@ -82,6 +82,17 @@ const SwarmHud: React.FC = () => {
           <Activity size={12} />
           Mock Swarm
         </button>
+        {demoSwarmActive && (
+          <button
+            type="button"
+            onClick={() => exitDemoSwarm()}
+            title="Clear the demo swarm and resume live Cursor presence"
+            className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/55 hover:bg-black/70 px-3 py-1.5 text-[11px] font-semibold text-white/90 shadow-lg transition-apple active:scale-95"
+          >
+            <X size={12} />
+            Exit Demo
+          </button>
+        )}
       </div>
 
       {agentCount === 0 && (

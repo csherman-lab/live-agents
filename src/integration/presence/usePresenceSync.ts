@@ -323,6 +323,17 @@ export function injectMockSwarm() {
   }, 12000);
 }
 
+/**
+ * Exit the mock swarm one-way door: clear the demo roster so real Cursor hub
+ * events (SSE / hydrate) can drive the office again.
+ */
+export function exitDemoSwarm() {
+  usePresenceStore.getState().clear();
+  // Re-pull whatever the hub currently holds so live agents reappear immediately
+  // instead of waiting for the next hook event.
+  void getPresenceClient().hydrateFromHub();
+}
+
 /** Switch to Advanced (BYOK / Teams) and restore prior team if known. */
 export function enterAdvancedMode() {
   const presence = usePresenceStore.getState();
