@@ -69,6 +69,29 @@ async function main() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   });
 
+  // Clean up: remove the smoke lead (and its subagent tree) so the smoke test
+  // doesn't leave zombie workers sitting in the office after it exits.
+  await mustOk('cleanup: remove smoke session (no zombies left in hub)', async () => {
+    const stop = mapHookToPresence({
+      hook_event_name: 'stop',
+      conversation_id: 'smoke-session',
+    });
+    const res = await fetch(HUB, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(stop),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const snapRes = await fetch(HUB);
+    const data = await snapRes.json();
+    const agents = data.agents || data;
+    const stillPresent = (Array.isArray(agents) ? agents : []).some((a) =>
+      String(a.agentId).startsWith('smoke-'),
+    );
+    if (stillPresent) throw new Error('smoke agents still present after cleanup');
+  });
+
   if (process.exitCode) {
     console.error('\nSmoke failed. Is npm run dev running on :3000?');
   } else {

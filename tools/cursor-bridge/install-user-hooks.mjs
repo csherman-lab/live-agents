@@ -32,10 +32,16 @@ const EVENTS = [
 
 function loadHooksJson() {
   if (!existsSync(hooksJsonPath)) return { version: 1, hooks: {} };
+  const raw = readFileSync(hooksJsonPath, 'utf8');
   try {
-    return JSON.parse(readFileSync(hooksJsonPath, 'utf8'));
-  } catch {
-    return { version: 1, hooks: {} };
+    return JSON.parse(raw);
+  } catch (err) {
+    // Never silently overwrite a file we can't parse — that would destroy the
+    // user's existing (if malformed) hooks.json. Abort loudly instead.
+    console.error(`Refusing to install: ${hooksJsonPath} is not valid JSON.`);
+    console.error(`  ${err?.message || err}`);
+    console.error('Fix or remove that file, then re-run npm run bridge:install.');
+    process.exit(1);
   }
 }
 
@@ -102,6 +108,9 @@ main();
     config.hooks[event] = filtered;
   }
 
+  if (existsSync(hooksJsonPath)) {
+    copyFileSync(hooksJsonPath, `${hooksJsonPath}.bak`);
+  }
   writeFileSync(hooksJsonPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
   console.log('Installed Live Agents user hooks:');

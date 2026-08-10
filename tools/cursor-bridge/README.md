@@ -63,12 +63,12 @@ export LIVE_AGENTS_PRESENCE_URL=http://127.0.0.1:3000/api/presence
 |--------|--------|
 | Hub online / SSE / last event age | Lobby + in-office HUD |
 | Hook script runs | Cursor **Hooks** output channel |
-| Per-agent placement / fail count | DevTools: `window.__laPresence()` |
+| Roster / agent count (empty check) | DevTools: `window.__laPresenceHub()` → `agentCount` / `agentIds` |
 
 Common fixes:
 
 - HUD says hub offline → start `npm run dev` on port 3000  
 - Agents idle forever → try **Mock Swarm** first; live needs a hook event  
-- Sit / path glitches → check `failCount` in `__laPresence()` (escape after 3 consecutive walk fails)
+- Roster not clearing → check `agentCount` / `agentIds` in `__laPresenceHub()` (should be `0` / `[]` after session/stop)
 
 Mock Swarm works without Cursor and is the fastest way to verify desk / board / lounge / stage motion.

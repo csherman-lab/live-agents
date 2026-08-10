@@ -115,9 +115,7 @@ const OverviewPanel: React.FC<OverviewPanelProps> = ({ onGoLive }) => {
                   ? `${agentCount} agent${agentCount === 1 ? '' : 's'} · last event ${formatEventAge(lastEventAt, now)}`
                   : hubUp
                     ? `Ready · last event ${formatEventAge(lastEventAt, now)}`
-                    : hubPending
-                      ? status.detail
-                      : status.detail}
+                    : status.detail}
               </p>
             </div>
           </div>

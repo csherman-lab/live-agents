@@ -121,7 +121,7 @@ Company-ready when all three paths pass in one sitting:
 
 1. Cold open screenshot — tip only, office readable
 2. Mock Swarm projector-distance glance — names + busy/idle readable
-3. Live start → stop → no zombies (`window.__laPresence()` empty / HUD waiting)
+3. Live start → stop → no zombies (`window.__laPresenceHub()` → `agentCount: 0` / HUD waiting)
 4. Hub killed mid-session — HUD says offline with `npm run dev` fix
 5. Fresh-clone README walk (or document any missing step and fix README)
 

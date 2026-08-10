@@ -16,6 +16,18 @@ interface HubState {
 
 const RECENT_MAX = 24;
 
+/**
+ * The presence hub is a dev-only local endpoint. Only the app's own origins may
+ * read it cross-origin from a browser; Cursor hooks POST via plain Node `fetch`
+ * (no CORS enforcement there) so this only tightens what a browser tab can see.
+ */
+const ALLOWED_ORIGINS = new Set(['http://localhost:3000', 'http://127.0.0.1:3000']);
+
+function resolveCorsOrigin(req: IncomingMessage): string | null {
+  const origin = req.headers.origin;
+  return typeof origin === 'string' && ALLOWED_ORIGINS.has(origin) ? origin : null;
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -25,11 +37,11 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown) {
+function sendJson(res: ServerResponse, status: number, body: unknown, origin: string | null) {
   const payload = JSON.stringify(body);
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
   res.end(payload);
 }
 
@@ -108,26 +120,34 @@ export function presenceHubPlugin(): Plugin {
 
   const middleware: Connect.NextHandleFunction = async (req, res, next) => {
     const url = req.url?.split('?')[0] ?? '';
+    const origin = resolveCorsOrigin(req);
 
     if (req.method === 'OPTIONS' && url.startsWith('/api/presence')) {
       res.statusCode = 204;
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      }
       res.end();
       return;
     }
 
     if (url === '/api/presence/health' && req.method === 'GET') {
-      sendJson(res, 200, healthPayload(hub));
+      sendJson(res, 200, healthPayload(hub), origin);
       return;
     }
 
     if (url === '/api/presence' && req.method === 'GET') {
-      sendJson(res, 200, {
-        agents: [...hub.agents.values()],
-        health: healthPayload(hub),
-      });
+      sendJson(
+        res,
+        200,
+        {
+          agents: [...hub.agents.values()],
+          health: healthPayload(hub),
+        },
+        origin,
+      );
       return;
     }
 
@@ -139,15 +159,15 @@ export function presenceHubPlugin(): Plugin {
         for (const item of events) {
           const event = parsePresenceEvent(item);
           if (!event) {
-            sendJson(res, 400, { error: 'invalid presence event' });
+            sendJson(res, 400, { error: 'invalid presence event' }, origin);
             return;
           }
           applyToHub(hub, event);
           accepted.push(event);
         }
-        sendJson(res, 200, { ok: true, count: accepted.length });
+        sendJson(res, 200, { ok: true, count: accepted.length }, origin);
       } catch {
-        sendJson(res, 400, { error: 'invalid json' });
+        sendJson(res, 400, { error: 'invalid json' }, origin);
       }
       return;
     }
@@ -157,7 +177,7 @@ export function presenceHubPlugin(): Plugin {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
+        ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
       });
       res.write('\n');
       for (const event of hub.agents.values()) {
