@@ -762,6 +762,345 @@ def _make_headphones(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
     return headphones
 
 
+def _make_beanie(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
+    """Soft rounded knit beanie — snug dome + folded cuff, no brim (preview language)."""
+    crown_z = top_z - 0.055
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        location=Vector((0.0, 0.0, crown_z)),
+        radius=0.285,
+        segments=32,
+        ring_count=18,
+    )
+    dome = bpy.context.active_object
+    dome.name = 'beanie_dome'
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for v in dome.data.vertices:
+        # Flat-ish underside so it seats on the head like a real knit cap
+        if v.co.z < -0.02:
+            v.co.z = -0.02 + (v.co.z + 0.02) * 0.10
+            v.co.x *= 0.96
+            v.co.y *= 0.96
+        # Slight pinch/pucker at the crown top (classic beanie topknot silhouette)
+        if v.co.z > 0.09:
+            v.co.x *= 0.72
+            v.co.y *= 0.72
+            v.co.z *= 1.05
+    dome.scale = (1.16, 1.14, 0.82)
+    bpy.ops.object.transform_apply(scale=True)
+    assign_material(dome, acc_mat)
+    add_subsurf(dome, 1)
+    _apply_modifiers(dome)
+    shade_smooth(dome)
+
+    # Folded knit cuff hugging the headline, slightly wider than the dome base
+    cuff = add_cylinder(
+        'beanie_cuff',
+        Vector((0.0, 0.0, top_z - 0.145)),
+        radius=0.295,
+        depth=0.075,
+        material=acc_mat,
+        vertices=32,
+    )
+    cuff.scale = (1.08, 1.02, 1.0)
+    bpy.ops.object.transform_apply(scale=True)
+    for v in cuff.data.vertices:
+        ax = math.sqrt(v.co.x * v.co.x + v.co.y * v.co.y)
+        if ax > 0.20 and v.co.z < 0.0:
+            v.co.z -= 0.004
+            v.co.x *= 1.02
+            v.co.y *= 1.02
+    add_subsurf(cuff, 1)
+    _apply_modifiers(cuff)
+    shade_smooth(cuff)
+
+    # Small topknot pom so silhouette differs cleanly from the cap dome
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        location=Vector((0.0, 0.0, top_z + 0.075)),
+        radius=0.045,
+        segments=14,
+        ring_count=10,
+    )
+    pom = bpy.context.active_object
+    pom.name = 'beanie_pom'
+    assign_material(pom, acc_mat)
+    shade_smooth(pom)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in (dome, cuff, pom):
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = dome
+    bpy.ops.object.join()
+    beanie = bpy.context.active_object
+    beanie.name = 'beanie'
+    beanie.data.name = 'beanie'
+    return beanie
+
+
+def _make_glasses(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
+    """Simple round frames sitting on the face — thin rims + bridge + temple arms."""
+    # Frames sit lower than headwear, near mid-face (matches eye card placement).
+    frame_z = top_z - 0.36
+    y = -0.255  # just proud of the face shell so lenses don't z-fight the atlas
+    radius = 0.115
+    tube = 0.016
+    parts: list[bpy.types.Object] = []
+
+    for sx in (1, -1):
+        cx = 0.135 * sx
+        # Ring lens frame: torus-like ring built from beads for vinyl-toy chunkiness
+        steps = 16
+        for i in range(steps):
+            theta = 2.0 * math.pi * i / steps
+            x = cx + radius * math.cos(theta)
+            z = frame_z + radius * math.sin(theta)
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                location=Vector((x, y, z)),
+                radius=tube,
+                segments=8,
+                ring_count=6,
+            )
+            bead = bpy.context.active_object
+            bead.name = f'glasses_ring_{sx}_{i}'
+            assign_material(bead, acc_mat)
+            shade_smooth(bead)
+            parts.append(bead)
+
+        # Temple arm running back toward the ear
+        arm = add_cylinder(
+            f'glasses_arm_{sx}',
+            Vector((cx + radius * sx * 0.9, y + 0.07, frame_z + 0.01)),
+            radius=tube * 0.85,
+            depth=0.16,
+            material=acc_mat,
+            rotation=Euler((math.pi / 2.0, 0.0, 0.0)),
+            vertices=8,
+        )
+        shade_smooth(arm)
+        parts.append(arm)
+
+    # Bridge connecting the two rings across the nose
+    bridge = add_cylinder(
+        'glasses_bridge',
+        Vector((0.0, y, frame_z)),
+        radius=tube * 0.9,
+        depth=0.135 * 2 - radius * 2 + 0.02,
+        material=acc_mat,
+        rotation=Euler((0.0, math.pi / 2.0, 0.0)),
+        vertices=8,
+    )
+    shade_smooth(bridge)
+    parts.append(bridge)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in parts:
+        p.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+    bpy.ops.object.join()
+    glasses = bpy.context.active_object
+    glasses.name = 'glasses'
+    glasses.data.name = 'glasses'
+    return glasses
+
+
+def _make_lanyard(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
+    """Chest badge on a strap — sits over the torso, well clear of the head bone pin."""
+    # Placed relative to top_z (head crown) so it scales with the body proportion,
+    # but geometry lives on the chest/neck band, not the head bulb.
+    neck_z = top_z - 0.62
+    chest_z = top_z - 0.82
+    y = -0.155
+    parts: list[bpy.types.Object] = []
+
+    # Strap loops: two thin bands from the neck down to the badge (front only, V shape)
+    steps = 8
+    for sx in (1, -1):
+        for i in range(steps + 1):
+            t = i / steps
+            x = sx * 0.05 * (1.0 - t)
+            z = neck_z - t * (neck_z - chest_z)
+            yy = y - 0.01 * (1.0 - t)
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                location=Vector((x, yy, z)),
+                radius=0.018,
+                segments=8,
+                ring_count=6,
+            )
+            bead = bpy.context.active_object
+            bead.name = f'lanyard_strap_{sx}_{i}'
+            assign_material(bead, acc_mat)
+            shade_smooth(bead)
+            parts.append(bead)
+
+    # Badge card: flat rounded rectangle hanging at the chest
+    badge = add_cube(
+        'lanyard_badge',
+        Vector((0.0, y, chest_z - 0.04)),
+        Vector((0.085, 0.006, 0.115)),
+        acc_mat,
+    )
+    bevel = badge.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.012
+    bevel.segments = 3
+    add_subsurf(badge, 1)
+    _apply_modifiers(badge)
+    shade_smooth(badge)
+    parts.append(badge)
+
+    # Small clip ring at the top of the badge
+    clip = add_cylinder(
+        'lanyard_clip',
+        Vector((0.0, y, chest_z + 0.075)),
+        radius=0.018,
+        depth=0.010,
+        material=acc_mat,
+        rotation=Euler((math.pi / 2.0, 0.0, 0.0)),
+        vertices=12,
+    )
+    shade_smooth(clip)
+    parts.append(clip)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in parts:
+        p.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+    bpy.ops.object.join()
+    lanyard = bpy.context.active_object
+    lanyard.name = 'lanyard'
+    lanyard.data.name = 'lanyard'
+    return lanyard
+
+
+def _make_backpack(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
+    """Chunky vinyl backpack riding high on the back — straps peek over the shoulders."""
+    back_y = 0.175  # behind the torso (face/front is −Y)
+    top_pack_z = top_z - 0.50
+    bottom_pack_z = top_z - 0.88
+    center_z = (top_pack_z + bottom_pack_z) * 0.5
+    half_z = (top_pack_z - bottom_pack_z) * 0.5
+    parts: list[bpy.types.Object] = []
+
+    body = add_cube(
+        'backpack_body',
+        Vector((0.0, back_y, center_z)),
+        Vector((0.135, 0.080, half_z)),
+        acc_mat,
+    )
+    bevel = body.modifiers.new('Bevel', 'BEVEL')
+    bevel.width = 0.024
+    bevel.segments = 3
+    add_subsurf(body, 1)
+    _apply_modifiers(body)
+    shade_smooth(body)
+    parts.append(body)
+
+    # Top flap pocket — reads as a bag lid, not a plain block, at iso
+    flap = add_cube(
+        'backpack_flap',
+        Vector((0.0, back_y - 0.015, top_pack_z - 0.02)),
+        Vector((0.100, 0.052, 0.045)),
+        acc_mat,
+    )
+    flap_bevel = flap.modifiers.new('Bevel', 'BEVEL')
+    flap_bevel.width = 0.014
+    flap_bevel.segments = 2
+    add_subsurf(flap, 1)
+    _apply_modifiers(flap)
+    shade_smooth(flap)
+    parts.append(flap)
+
+    # Small front pocket bump
+    pocket = add_cube(
+        'backpack_pocket',
+        Vector((0.0, back_y + 0.072, center_z - 0.03)),
+        Vector((0.070, 0.018, 0.055)),
+        acc_mat,
+    )
+    add_subsurf(pocket, 1)
+    _apply_modifiers(pocket)
+    shade_smooth(pocket)
+    parts.append(pocket)
+
+    # Shoulder straps — visible peeking over the front shoulders even though the pack
+    # itself rides on the back.
+    strap_top_z = top_z - 0.42
+    for sx in (1, -1):
+        strap = add_cylinder(
+            f'backpack_strap_{sx}',
+            Vector((0.118 * sx, -0.015, strap_top_z)),
+            radius=0.024,
+            depth=0.17,
+            material=acc_mat,
+            rotation=Euler((math.radians(20), 0.0, 0.0)),
+            vertices=10,
+        )
+        shade_smooth(strap)
+        parts.append(strap)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in parts:
+        p.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+    bpy.ops.object.join()
+    backpack = bpy.context.active_object
+    backpack.name = 'backpack'
+    backpack.data.name = 'backpack'
+    return backpack
+
+
+def _make_scarf(acc_mat, top_z: float = 1.14) -> bpy.types.Object:
+    """Soft looped scarf hugging the neckline, with two hanging tails down the chest."""
+    neck_z = top_z - 0.60
+    radius_x = 0.195
+    radius_y = 0.175
+    parts: list[bpy.types.Object] = []
+
+    steps = 16
+    for i in range(steps):
+        theta = 2.0 * math.pi * i / steps
+        x = radius_x * math.cos(theta)
+        y = radius_y * math.sin(theta)
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            location=Vector((x, y, neck_z)),
+            radius=0.030,
+            segments=8,
+            ring_count=6,
+        )
+        bead = bpy.context.active_object
+        bead.name = f'scarf_band_{i}'
+        assign_material(bead, acc_mat)
+        shade_smooth(bead)
+        parts.append(bead)
+
+    # Two hanging tails down the front chest (slight V spread)
+    chest_top_z = neck_z - 0.02
+    chest_bot_z = top_z - 0.94
+    tail_half_z = max((chest_top_z - chest_bot_z) * 0.5, 0.02)
+    for sx in (1, -1):
+        tail = add_cube(
+            f'scarf_tail_{sx}',
+            Vector((0.045 * sx, -0.175, (chest_top_z + chest_bot_z) * 0.5)),
+            Vector((0.038, 0.014, tail_half_z)),
+            acc_mat,
+        )
+        tail_bevel = tail.modifiers.new('Bevel', 'BEVEL')
+        tail_bevel.width = 0.011
+        tail_bevel.segments = 2
+        add_subsurf(tail, 1)
+        _apply_modifiers(tail)
+        shade_smooth(tail)
+        parts.append(tail)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in parts:
+        p.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+    bpy.ops.object.join()
+    scarf = bpy.context.active_object
+    scarf.name = 'scarf'
+    scarf.data.name = 'scarf'
+    return scarf
+
+
 def _make_face_shell(
     name: str,
     center: Vector,
@@ -956,6 +1295,11 @@ def create_icon_meshes(
     top_z = head_top
     cap = _make_baseball_cap(cap_mat, top_z)
     headphones = _make_headphones(acc_mat, top_z)
+    beanie = _make_beanie(cap_mat, top_z)
+    glasses = _make_glasses(cap_mat, top_z)
+    lanyard = _make_lanyard(acc_mat, top_z)
+    backpack = _make_backpack(acc_mat, top_z)
+    scarf = _make_scarf(acc_mat, top_z)
 
     # Body gets automatic weights across the full skeleton.
     body_mod = body.modifiers.new('Armature', 'ARMATURE')
@@ -988,11 +1332,20 @@ def create_icon_meshes(
     # Must restore POSE before glTF export — force-sampling in REST bakes
     # every action down to 2 rest-pose keys (Walk leg travel → 0).
     arm_obj.data.pose_position = 'REST'
-    for obj in (eyes, mouth, cap, headphones):
+    # Headwear/face pin to 'head' bone (rides with head nods); lanyard hangs from the
+    # chest so it pins to 'spine' instead — avoids a badge swinging on head look-arounds.
+    # Backpack rides on the back → 'spine' (same rationale as lanyard). Scarf hugs the
+    # neckline directly below the head → 'head' (rig has no separate neck bone).
+    pin_specs = [
+        (eyes, 'head'), (mouth, 'head'), (cap, 'head'), (headphones, 'head'),
+        (beanie, 'head'), (glasses, 'head'), (lanyard, 'spine'),
+        (backpack, 'spine'), (scarf, 'head'),
+    ]
+    for obj, bone_name in pin_specs:
         mw = obj.matrix_world.copy()
         obj.parent = arm_obj
         obj.matrix_world = mw
-        _pin_mesh_to_bone(obj, arm_obj, 'head')
+        _pin_mesh_to_bone(obj, arm_obj, bone_name)
         # Remove any prior armature mods
         for mod in list(obj.modifiers):
             if mod.type == 'ARMATURE':
@@ -1004,7 +1357,7 @@ def create_icon_meshes(
         print(f'{obj.name} groups={[g.name for g in obj.vertex_groups]} loc={tuple(round(x,3) for x in obj.location)}')
     arm_obj.data.pose_position = 'POSE'
 
-    return [body, eyes, mouth, cap, headphones]
+    return [body, eyes, mouth, cap, headphones, beanie, glasses, lanyard, backpack, scarf]
 
 
 def build_character() -> None:
@@ -1032,7 +1385,10 @@ def build_character() -> None:
 
     create_icon_meshes(arm_obj, eyes_img, mouth_img, ref_body)
 
-    allowed = {'body', 'eyes', 'mouth', 'cap', 'headphones'}
+    allowed = {
+        'body', 'eyes', 'mouth', 'cap', 'headphones', 'beanie', 'glasses', 'lanyard',
+        'backpack', 'scarf',
+    }
 
     # Force-remove every non-contract mesh (incl. armature children / bone shapes).
     # use_selection still walks armature children; orphans must be gone first.
@@ -1184,7 +1540,7 @@ def _print_verify_metrics(arm_obj: bpy.types.Object) -> None:
             mouth_h = max(p.z for p in mouth_pts) - min(p.z for p in mouth_pts)
             mouth_cz = sum(p.z for p in mouth_pts) / len(mouth_pts)
             print(f'Mouth size=({mouth_w:.3f}×{mouth_h:.3f}) center_z={mouth_cz:.3f}')
-    for name in ('cap', 'headphones'):
+    for name in ('cap', 'headphones', 'beanie', 'glasses', 'lanyard', 'backpack', 'scarf'):
         obj = bpy.data.objects.get(name)
         if obj:
             pts = [obj.matrix_world @ v.co for v in obj.data.vertices]

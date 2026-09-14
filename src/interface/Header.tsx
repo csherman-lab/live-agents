@@ -3,6 +3,8 @@ import React from 'react';
 import packageJson from '../../package.json';
 import { useCoreStore } from '../integration/store/coreStore';
 import { useUiStore } from '../integration/store/uiStore';
+import { usePresenceStore } from '../integration/presence/presenceStore';
+import { enterAdvancedMode, enterMirrorMode } from '../integration/presence/usePresenceSync';
 import { enterWorkspace } from '../integration/enterWorkspace';
 import { openInExternalBrowser } from '../utils/openInBrowser';
 import Logo from './components/Logo';
@@ -15,8 +17,10 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }) => {
-  const { llmConfig, setSettingsOpen, setAboutOpen, isDemoMode } = useUiStore();
+  const { llmConfig, setSettingsOpen, setAboutOpen } = useUiStore();
   const { setViewMode, viewMode } = useCoreStore();
+  const mirrorMode = usePresenceStore((s) => s.mirrorMode);
+  const agentCount = usePresenceStore((s) => Object.keys(s.agents).length);
   const hasKey = !!llmConfig.apiKey;
 
   const handleFullscreen = () => {
@@ -29,6 +33,7 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }
 
   const toggleWorkspace = () => {
     if (viewMode === 'overview') {
+      if (!mirrorMode) enterMirrorMode();
       enterWorkspace();
     } else {
       setViewMode('overview');
@@ -40,8 +45,9 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }
     setSettingsOpen(true);
   };
 
-  const openTeams = () => {
+  const openAdvancedTeams = () => {
     onDismissOnboarding?.();
+    enterAdvancedMode();
     setViewMode('design');
   };
 
@@ -54,21 +60,27 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[13px] font-medium text-appleBlue hover:bg-appleBlue/10 transition-apple active:scale-95"
           >
             <ArrowLeft size={15} />
-            <span className="hidden sm:inline">Overview</span>
+            <span className="hidden sm:inline">Lobby</span>
           </button>
         )}
 
         <Logo />
-        <span className="text-[10px] font-medium text-zinc-400/80 font-mono hidden lg:inline tabular-nums">v{version}</span>
+        <span className="text-[10px] font-medium text-zinc-400/80 font-mono hidden lg:inline tabular-nums">
+          v{version}
+        </span>
       </div>
 
       {viewMode === 'simulation' && (
         <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center">
           <span className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-medium theme-badge shadow-sm">
             <LayoutDashboard size={13} className="text-appleBlue" />
-            Workspace
-            {isDemoMode && !hasKey && (
-              <span className="text-[10px] font-medium text-orange-500">· Demo</span>
+            Office
+            {mirrorMode ? (
+              <span className="text-[10px] font-medium text-emerald-500">
+                · Mirror{agentCount > 0 ? ` · ${agentCount}` : ''}
+              </span>
+            ) : (
+              <span className="text-[10px] font-medium text-orange-500">· Advanced</span>
             )}
           </span>
         </div>
@@ -76,27 +88,25 @@ const Header: React.FC<HeaderProps> = ({ onBackToOverview, onDismissOnboarding }
 
       <div className="flex items-center gap-1">
         <button
-          onClick={openTeams}
+          onClick={toggleWorkspace}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[13px] font-semibold text-white transition-apple active:scale-95 bg-appleBlue hover:opacity-90 shadow-sm"
-          title="Manage Teams"
+          title="Enter Office"
         >
-          <Users size={14} />
-          <span className="hidden sm:inline">Teams</span>
+          <LayoutDashboard size={14} />
+          <span className="hidden sm:inline">{viewMode === 'simulation' ? 'Lobby' : 'Enter Office'}</span>
         </button>
 
         <div className="w-px h-5 bg-black/8 mx-1 hidden sm:block" />
 
-        <HeaderIcon
-          onClick={toggleWorkspace}
-          active={viewMode === 'overview'}
-          title={viewMode === 'overview' ? 'Enter workspace' : 'Back to overview'}
-        >
-          <LayoutDashboard size={16} />
-        </HeaderIcon>
+        {!mirrorMode && (
+          <HeaderIcon onClick={openAdvancedTeams} title="Advanced · Teams">
+            <Users size={16} />
+          </HeaderIcon>
+        )}
 
         <HeaderIcon
           onClick={openSettings}
-          title="Settings & API"
+          title="Settings"
           dot={hasKey}
           dotColor="bg-appleGreen"
         >

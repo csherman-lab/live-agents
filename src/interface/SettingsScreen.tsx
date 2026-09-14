@@ -8,18 +8,29 @@ interface SettingsScreenProps {
   onClose: () => void;
   onReplayOnboarding?: () => void;
   onOpenShortcuts?: () => void;
+  onOpenAdvanced?: () => void;
 }
 
-const SettingsScreen: React.FC<SettingsScreenProps> = ({ open, onClose, onReplayOnboarding, onOpenShortcuts }) => (
+const SettingsScreen: React.FC<SettingsScreenProps> = ({
+  open,
+  onClose,
+  onReplayOnboarding,
+  onOpenShortcuts,
+  onOpenAdvanced,
+}) => (
   <Modal
     open={open}
     onClose={onClose}
     title="Settings"
-    subtitle="Configure API keys, display preferences, and your workspace"
+    subtitle="Companion preferences — Advanced tools are optional"
     size="lg"
     icon={<Settings size={18} className="text-appleBlue" />}
   >
-    <SettingsPanel onReplayOnboarding={onReplayOnboarding} onOpenShortcuts={onOpenShortcuts} />
+    <SettingsPanel
+      onReplayOnboarding={onReplayOnboarding}
+      onOpenShortcuts={onOpenShortcuts}
+      onOpenAdvanced={onOpenAdvanced}
+    />
   </Modal>
 );
 

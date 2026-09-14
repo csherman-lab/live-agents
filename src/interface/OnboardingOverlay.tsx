@@ -53,72 +53,73 @@ const STEPS: Step[] = [
   {
     id: 'welcome',
     eyebrow: 'Welcome',
-    title: 'Meet Live Agents',
+    title: 'Watch your Cursor swarm',
     lead:
-      'A calm command center where AI agents collaborate — in chat, in tasks, or in a living 3D office when WebGPU is available.',
+      'Live Agents is a side-window companion: Cursor agents and subagents appear as named vinyl workers in a 3D office — like a little game.',
     bullets: [
-      'Start text-first: brief, chat, and approve work without 3D',
-      'Go Live for the immersive office when your browser supports WebGPU',
-      'Gemini, OpenAI, or Anthropic — keys stay local in your browser',
+      'No API key required to watch',
+      'One character per agent or subagent',
+      'Customize name, color, and accessory anytime',
     ],
   },
   {
     id: 'workspace',
-    eyebrow: 'Watch live',
+    eyebrow: 'Play',
     title: 'Orbit, follow, read the room',
     lead:
-      'After Go Live, explore the 3D office. Drag to look around, then follow any agent and read what they’re doing.',
+      'Enter the office, look around, and follow whoever is thinking or working.',
     bullets: [
-      'Drag to orbit · scroll to zoom the office',
-      'Press 1–9 or click an agent to follow them',
-      'Status bubbles show what each agent is doing',
+      'Drag to orbit · scroll to zoom',
+      'Click an agent (or press 1–9) to follow them',
+      'Nameplates and status bubbles show what they’re doing',
+      'Click again to customize their look',
     ],
   },
   {
     id: 'loop',
     eyebrow: 'How it works',
-    title: 'Brief, go live, delegate',
+    title: 'Cursor talks. The office reacts.',
     lead:
-      'Start in the Command Center, launch into the 3D workspace, and let specialists handle the work.',
+      'Hooks stream agent lifecycle into the office. Thinking, tooling, and done states drive the workers.',
     bullets: [
-      'Write a brief or pick a project template',
-      'Hit Go Live (or press G) to enter the immersive simulation',
-      'Review outputs, export deliverables, and iterate',
+      'Keep this app open beside Cursor',
+      'Start an agent or swarm — characters spawn with names',
+      'Or hit Mock Swarm to preview without Cursor',
     ],
   },
   {
     id: 'crew',
-    eyebrow: 'Your team',
-    title: 'Specialists, not one bot',
+    eyebrow: 'Identity',
+    title: 'Every worker has a name',
     lead:
-      'Each agent has a role — research, writing, design, engineering — coordinated like a real crew.',
+      'Defaults use a collective vinyl look. You can rename, recolor, and pick accessories so each agent is recognizable.',
     bullets: [
-      'Customize roles and colors in Design mode',
-      'Templates jump-start common project types',
-      'Memory persists across sessions per team',
+      'Stable looks persist in your browser',
+      'Lead gets the cap; specialists cycle accessories',
+      'Swarm count stays visible in the HUD',
     ],
   },
   {
     id: 'setup',
-    eyebrow: 'Quick setup',
-    title: 'Connect and configure',
+    eyebrow: 'Ready',
+    title: 'You’re set — no key needed',
     lead:
-      'Add an API key for Gemini, OpenAI, or Anthropic. You can always change provider and model in Settings.',
+      'Mirror mode is the default. Advanced mode (Teams / BYOK) is optional if you want the old in-app runner.',
     bullets: [
-      'API keys stay local in your browser — never sent to our servers',
-      'OpenAI and Anthropic are text-only; use Gemini for image/music/video teams',
-      'Try Explore demo to browse without a key',
+      'Enter Office to open the spectator',
+      'Enable project hooks so Cursor can stream presence',
+      'Advanced tools stay available when you want them',
     ],
   },
   {
     id: 'launch',
-    eyebrow: 'Ready',
-    title: 'Enter the workspace',
+    eyebrow: 'Go',
+    title: 'Open the office',
     lead:
-      'You are set. Brief your team, chat from overview, or jump into Go Live.',
+      'Jump in. When Cursor agents run, they show up here.',
     bullets: [
-      'G — Go Live · 1–9 — follow an agent · ? — shortcuts',
-      'Chat with lead agent from Command Center (text-first)',
+      'G — Enter Office · 1–9 — follow · E — wave · ? — shortcuts',
+      'Mock Swarm — preview with demo agents',
       'Replay this intro from Settings anytime',
     ],
   },
@@ -197,20 +198,20 @@ function StepVisual({
         <div className="la-onboard__scene la-onboard__scene--loop">
           <div className="la-onboard__loop-track" />
           <div className="la-onboard__loop-node" style={{ animationDelay: '0s' }}>
-            <LayoutGrid size={22} />
-            <span>Command Center</span>
+            <Radio size={22} />
+            <span>Cursor runs</span>
           </div>
           <div className="la-onboard__loop-node" style={{ animationDelay: '-0.75s' }}>
-            <Play size={22} />
-            <span>Go Live</span>
+            <Zap size={22} />
+            <span>Presence stream</span>
           </div>
           <div className="la-onboard__loop-node" style={{ animationDelay: '-1.5s' }}>
             <Users size={22} />
-            <span>Agents work</span>
+            <span>Workers spawn</span>
           </div>
           <div className="la-onboard__loop-node" style={{ animationDelay: '-2.25s' }}>
-            <Sparkles size={22} />
-            <span>Deliverables</span>
+            <Play size={22} />
+            <span>You watch</span>
           </div>
         </div>
       );
@@ -219,10 +220,10 @@ function StepVisual({
       return (
         <div className="la-onboard__scene la-onboard__scene--crew">
           {[
-            { name: 'Research', role: 'Analyst', color: '#007aff' },
-            { name: 'Writer', role: 'Content', color: '#af52de' },
-            { name: 'Design', role: 'Visual', color: '#ff9500' },
-            { name: 'Build', role: 'Engineer', color: '#34c759' },
+            { name: 'Cursor', role: 'Lead', color: '#007aff' },
+            { name: 'Explore', role: 'Subagent', color: '#af52de' },
+            { name: 'Shell', role: 'Subagent', color: '#ff9500' },
+            { name: 'Review', role: 'Subagent', color: '#34c759' },
           ].map((agent, i) => (
             <div
               key={agent.name}
@@ -242,28 +243,28 @@ function StepVisual({
       const dash = (readiness / 100) * circumference;
       const items = [
         {
-          id: 'api',
-          ok: hasApiKey,
-          title: 'AI provider',
-          detail: hasApiKey ? 'Connected' : 'Required to run agents',
-          action: hasApiKey ? null : 'Add key',
-          onAction: onOpenSettings,
-        },
-        {
-          id: 'team',
+          id: 'mirror',
           ok: true,
-          title: 'Agent team',
-          detail: 'Default crew loaded',
-          action: 'Customize',
-          onAction: onOpenTeams,
-        },
-        {
-          id: 'ready',
-          ok: hasApiKey,
-          title: 'Workspace',
-          detail: hasApiKey ? 'Ready to go live' : 'Add API key first',
+          title: 'Mirror mode',
+          detail: 'Default — no API key required',
           action: null,
           onAction: undefined,
+        },
+        {
+          id: 'office',
+          ok: true,
+          title: '3D office',
+          detail: 'WebGPU browser recommended',
+          action: null,
+          onAction: undefined,
+        },
+        {
+          id: 'advanced',
+          ok: true,
+          title: 'Advanced runner',
+          detail: hasApiKey ? 'API key on file (optional)' : 'Optional BYOK in Settings',
+          action: hasApiKey ? null : 'Settings',
+          onAction: hasApiKey ? undefined : onOpenSettings,
         },
       ];
 
@@ -321,7 +322,7 @@ function StepVisual({
           <div className="la-onboard__launch-icon">
             <Radio size={48} strokeWidth={1.5} />
           </div>
-          <p>Your agents are standing by</p>
+          <p>Your office is ready</p>
         </div>
       );
 
@@ -346,11 +347,7 @@ export function OnboardingOverlay({
   const isFirst = stepIndex === 0;
   const isLast = stepIndex === STEPS.length - 1;
 
-  const readiness = useMemo(() => {
-    let score = 34; // default team
-    if (hasApiKey) score += 66;
-    return Math.min(100, score);
-  }, [hasApiKey]);
+  const readiness = useMemo(() => 100, []);
 
   const finish = useCallback(() => {
     markOnboardingDone();
@@ -360,12 +357,12 @@ export function OnboardingOverlay({
   const goNext = useCallback(() => {
     if (isLast) {
       finish();
-      if (hasApiKey) onGoLive();
+      onGoLive();
       return;
     }
     setDirection('forward');
     setStepIndex((i) => Math.min(i + 1, STEPS.length - 1));
-  }, [isLast, finish, onGoLive, hasApiKey]);
+  }, [isLast, finish, onGoLive]);
 
   const goBack = useCallback(() => {
     setDirection('backward');
@@ -511,7 +508,7 @@ export function OnboardingOverlay({
             {isLast ? (
               <>
                 <Zap size={16} />
-                {hasApiKey ? 'Enter Live Agents' : 'Open Command Center'}
+                {'Enter Office'}
               </>
             ) : (
               <>

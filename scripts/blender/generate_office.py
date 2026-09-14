@@ -148,7 +148,6 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
         return loc + _rot_offset(offset, rot_z)
 
     rot = Euler((0, 0, rot_z))
-    _ = accent
     desk_z = 0.528
     parts: list[bpy.types.Object] = []
 
@@ -199,12 +198,14 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
             subsurf=0,
         )
     )
-    # Desk clutter stays on the desk mesh for density without extra export meshes
+    # Desk clutter stays on the desk mesh for density without extra export meshes.
+    # Wave 3: bumped keyboard/mouse/notepad up ~15-20% so they read at iso instead of
+    # disappearing into the desk-white slab.
     parts.append(
         _smooth_cube(
             f'_keyboard.{idx}',
             at(Vector((0, 0.14, desk_z))),
-            Vector((0.21, 0.075, 0.014)),
+            Vector((0.235, 0.085, 0.016)),
             white,
             rot=rot,
             bevel=0.008,
@@ -214,11 +215,11 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
     parts.append(
         _smooth_cube(
             f'_mouse.{idx}',
-            at(Vector((0.30, 0.12, desk_z + 0.008))),
-            Vector((0.032, 0.052, 0.018)),
+            at(Vector((0.30, 0.12, desk_z + 0.009))),
+            Vector((0.038, 0.060, 0.022)),
             white,
             rot=rot,
-            bevel=0.014,
+            bevel=0.016,
             bevel_seg=4,
             subsurf=1,
         )
@@ -227,13 +228,27 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
         _smooth_cube(
             f'_notepad.{idx}',
             at(Vector((-0.30, 0.10, desk_z))),
-            Vector((0.065, 0.085, 0.010)),
+            Vector((0.078, 0.100, 0.012)),
             paper,
             rot=Euler((0, 0, rot_z + 0.18)),
             bevel=0.004,
             subsurf=0,
         )
     )
+    # Second small paper stack (two thin sheets) — extra desk density on the
+    # front-right corner, clear of the mouse/mug/PC-stand footprints.
+    for i, oz in enumerate((desk_z + 0.006, desk_z + 0.020)):
+        parts.append(
+            _smooth_cube(
+                f'_paper-stack.{idx}.{i}',
+                at(Vector((0.20, -0.16, oz))),
+                Vector((0.058, 0.072, 0.010)),
+                paper,
+                rot=Euler((0, 0, rot_z - 0.08 + i * 0.06)),
+                bevel=0.004,
+                subsurf=0,
+            )
+        )
     for i, (ox, oz, h) in enumerate(((-0.42, desk_z + 0.006, 0.014), (-0.42, desk_z + 0.028, 0.012))):
         parts.append(
             _smooth_cube(
@@ -246,13 +261,15 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
                 subsurf=0,
             )
         )
+    # Wave 3: mug takes the accent color (was plain white) so it pops as a spot of
+    # color against the white desk/keyboard instead of blending in.
     parts.append(
         _smooth_cyl(
             f'_mug.{idx}',
             at(Vector((0.40, -0.02, desk_z + 0.038))),
             0.030,
             0.070,
-            white,
+            accent,
             rot=rot,
             verts=20,
             subsurf=1,
@@ -263,7 +280,7 @@ def _add_work_desk(idx: int, loc: Vector, rot_z: float, white, metal, screen, ac
             f'_mug-handle.{idx}',
             at(Vector((0.438, -0.02, desk_z + 0.038))),
             Vector((0.014, 0.010, 0.024)),
-            white,
+            accent,
             rot=rot,
             bevel=0.006,
             subsurf=0,
@@ -598,17 +615,29 @@ def _add_sofa(loc: Vector, white, metal) -> None:
     _join('static-sofa', parts)
 
 
-def _add_cafe_table(loc: Vector, white, metal) -> None:
+def _add_cafe_table(loc: Vector, white, metal, paper) -> None:
     parts = [
         _smooth_cyl('_cafe-top', loc + Vector((0, 0, 0.42)), 0.44, 0.038, white, verts=56, subsurf=1),
         _smooth_cyl('_cafe-pole', loc + Vector((0, 0, 0.21)), 0.048, 0.40, metal, verts=20, subsurf=0),
         _smooth_cyl('_cafe-base', loc + Vector((0, 0, 0.025)), 0.24, 0.032, metal, verts=36, subsurf=0),
         _smooth_cyl('_cafe-coaster', loc + Vector((0.12, 0.08, 0.445)), 0.05, 0.008, white, verts=20, subsurf=0),
+        # Wave 3: light lounge clutter — cup + folded napkin, both clear of the
+        # coaster and well inside the tabletop radius (0.44).
+        _smooth_cyl('_cafe-cup', loc + Vector((-0.14, -0.05, 0.472)), 0.028, 0.065, white, verts=18, subsurf=1),
+        _smooth_cube(
+            '_cafe-napkin',
+            loc + Vector((-0.05, 0.15, 0.443)),
+            Vector((0.09, 0.09, 0.004)),
+            paper,
+            rot=Euler((0, 0, 0.32)),
+            bevel=0.002,
+            subsurf=0,
+        ),
     ]
     _join('static-cafe-table', parts)
 
 
-def _add_counter(loc: Vector, white, metal, screen) -> None:
+def _add_counter(loc: Vector, white, metal, screen, paper) -> None:
     parts: list[bpy.types.Object] = [
         _smooth_cube(
             '_counter-body',
@@ -636,11 +665,12 @@ def _add_counter(loc: Vector, white, metal, screen) -> None:
             subsurf=0,
         ),
         _smooth_cyl('_cup', loc + Vector((0.40, 0.05, 0.88)), 0.032, 0.075, white, verts=18, subsurf=1),
+        # Wave 3: pad reads as paper (was flat white, blended into the counter top)
         _smooth_cube(
             '_counter-pad',
             loc + Vector((0.15, 0.05, 0.855)),
-            Vector((0.08, 0.10, 0.005)),
-            white,
+            Vector((0.09, 0.11, 0.006)),
+            paper,
             bevel=0.003,
             subsurf=0,
         ),
@@ -1030,8 +1060,8 @@ def build_office() -> None:
         _add_office_chair(idx, loc, rot, white_mat, metal_mat)
 
     _add_sofa(Vector((-4.04, -1.13, 0.0)), white_mat, metal_mat)
-    _add_cafe_table(Vector((-2.96, 3.46, 0.0)), white_mat, metal_mat)
-    _add_counter(Vector((-3.50, -3.94, 0.0)), white_mat, metal_mat, screen_mat)
+    _add_cafe_table(Vector((-2.96, 3.46, 0.0)), white_mat, metal_mat, paper_mat)
+    _add_counter(Vector((-3.50, -3.94, 0.0)), white_mat, metal_mat, screen_mat, paper_mat)
     _add_board(Vector((3.00, -2.47, 0.0)), white_mat, screen_mat, metal_mat)
     _add_cabinet(Vector((-4.79, 3.64, 0.0)), white_mat, metal_mat, paper_mat)
 

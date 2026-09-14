@@ -1,10 +1,11 @@
 import * as THREE from 'three/webgpu';
-import { getAgentSet, getAllAgents, AgenticSystem } from '../data/agents';
+import { getAgentSet, getAllAgents, AgenticSystem, USER_COLOR } from '../data/agents';
 import { CharacterController } from './CharacterController';
 import { Engine } from './core/Engine';
 import { Stage } from './core/Stage';
 import { DriverManager } from './drivers/DriverManager';
 import { CharacterManager } from './entities/CharacterManager';
+import { HoverRing, SelectionRing } from './entities/SelectionRing';
 import { InputManager } from './input/InputManager';
 import { NavMeshManager } from './pathfinding/NavMeshManager';
 import { PoiManager } from './world/PoiManager';
@@ -14,8 +15,44 @@ import { AgentSimulation } from './core/AgentSimulation';
 import { useCoreStore } from '../integration/store/coreStore';
 import { getActiveAgentSet, useTeamStore } from '../integration/store/teamStore';
 import { useUiStore } from '../integration/store/uiStore';
-import { AgentBehavior, ChatMessage } from '../types';
-import { BUBBLE_Y_OFFSET } from './constants';
+import {
+  CURSOR_MIRROR_SET_ID,
+  getMirrorNpcAgents,
+} from '../integration/presence/buildMirrorSystem';
+import { usePresenceStore } from '../integration/presence/presenceStore';
+import type { PresenceBehavior } from '../integration/presence/mapPresenceBehavior';
+import { assignMirrorSeatNear } from '../integration/presence/assignMirrorSeat';
+import {
+  MirrorPresenceDirector,
+  mirrorPlacementKey,
+} from '../integration/presence/MirrorPresenceDirector';
+import {
+  shouldIgnoreCoreTaskLocomotion,
+} from '../integration/presence/mirrorLocomotion';
+import { AgentBehavior, CharacterStateKey, ChatMessage } from '../types';
+import {
+  BUBBLE_Y_OFFSET,
+  CHAT_APPROACH_DISTANCE,
+  CONVERSATION_FACE_TURN_RATE,
+  HOVER_REACTION_CHANCE,
+  HOVER_REACTION_COOLDOWN_MS,
+  HOVER_REACTION_MIN_MS,
+  HOVER_RING_COLOR,
+  HOVER_RING_OPACITY,
+  LISTENER_MICROBEAT_INTERVAL,
+  PLAYER_RING_OPACITY,
+  SOCIAL_AMBIENT_DURATION,
+  SOCIAL_AMBIENT_INTERVAL,
+  SOCIAL_AMBIENT_MEETUP_RADIUS,
+  SOCIAL_AMBIENT_PAIR_RADIUS,
+  SOCIAL_NOTICE_CHANCE,
+  SOCIAL_NOTICE_COOLDOWN,
+  SOCIAL_NOTICE_RADIUS,
+} from './constants';
+import { ConversationSession } from './presence/ConversationSession';
+import { HoverReactionScheduler } from './presence/InteractionPresence';
+import { blendFacingXZ } from './presence/LocomotionPresence';
+import { SocialDirector } from './presence/SocialDirector';
 import { toast } from '../integration/store/toastStore';
 import { friendlyApiError } from '../utils/apiErrors';
 
@@ -39,10 +76,44 @@ export class SceneManager {
   private simulation: AgentSimulation | null = null;
 
   private lastAgentSetId: string | null = null;
+  /** Cursor companion intent / hysteresis (walks executed by SceneManager helpers). */
+  private mirrorDirector = new MirrorPresenceDirector();
+  private mirrorRetryAccum = 0;
+  private mirrorDimmed = new Map<number, boolean>();
   /** Camera follow target; kept in sync with uiStore.selectedNpcIndex (null → player). */
   private selectedIndex: number | null = null;
+  private selectionRing: SelectionRing | null = null;
+  private hoverRing: HoverRing | null = null;
+  private playerRing: HoverRing | null = null;
+  /** Avoids rebuilding the (tree-walked) agent list every frame just to read the selected agent's color. */
+  private selectedColorCache: { index: number; setId: string; color: string | undefined } | null = null;
   private inputManager: InputManager | null = null;
   private coreHandler: ((npcIndex: number, text: string) => Promise<string | null>) | null = null;
+  /** Player↔NPC conversation choreography (Wave 2). */
+  private playerChatSession: ConversationSession | null = null;
+  /** Ambient NPC↔NPC session (Wave 4/5). */
+  private ambientSession: ConversationSession | null = null;
+  /** True once ambient pair finished walking and is talking. */
+  private ambientTalking = false;
+  /** Meetup walk arrivals before talk starts. */
+  private ambientMeetupPending: { a: number; b: number; arrivedA: boolean; arrivedB: boolean } | null = null;
+  private socialDirector = new SocialDirector({
+    ambientInterval: SOCIAL_AMBIENT_INTERVAL,
+    ambientDuration: SOCIAL_AMBIENT_DURATION,
+    noticeRadius: SOCIAL_NOTICE_RADIUS,
+    noticeChance: SOCIAL_NOTICE_CHANCE,
+    noticeCooldown: SOCIAL_NOTICE_COOLDOWN,
+    ambientMeetupRadius: SOCIAL_AMBIENT_MEETUP_RADIUS,
+  });
+  private hoverReactions = new HoverReactionScheduler({
+    chance: HOVER_REACTION_CHANCE,
+    cooldownMs: HOVER_REACTION_COOLDOWN_MS,
+    minHoverMs: HOVER_REACTION_MIN_MS,
+  });
+  /** NPCs currently reserved by ambient chat (autonomy suspended). */
+  private ambientNpcIndices = new Set<number>();
+  private listenerMicrobeatTimer = 0;
+  private waveReactTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private unsubs: (() => void)[] = [];
   private isDisposed = false;
@@ -113,6 +184,8 @@ export class SceneManager {
           });
           
           if (!hasChange) return;
+          // Cursor companion owns seating — leftover Advanced tasks must not yank agents to desks.
+          if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
 
           const onHold = myTasks.find(t => t.status === 'on_hold');
           const inProgress = myTasks.find(t => t.status === 'in_progress');
@@ -137,6 +210,7 @@ export class SceneManager {
       if (this.isDisposed) return;
 
       await this.worldManager.load();
+      this.ensureMirrorStagingPois();
       await this.characterManager.load();
       if (this.isDisposed) return;
 
@@ -167,14 +241,30 @@ export class SceneManager {
         () => this.poiManager.getAllPois(),
         (id, label, pos) => useUiStore.getState().setHoveredPoi(id, label, pos),
         (id) => this.driverManager?.getPlayerDriver().onPoiClick(id),
-        this.worldManager.getOffice() ?? undefined, (p) => this.navMesh.isPointOnNavMesh(p)
+        this.worldManager.getOffice() ?? undefined, (p) => this.navMesh.isPointOnNavMesh(p),
+        (idx) => {
+          const player = getActiveAgentSet().user.index;
+          if (idx === player) return;
+          useUiStore.getState().setSelectedNpc(idx);
+          this.startChat(idx);
+        },
+        () => !useUiStore.getState().isChatting,
       );
+
+      this.selectionRing = new SelectionRing(this.stage.scene);
+      this.hoverRing = new HoverRing(this.stage.scene, HOVER_RING_COLOR, HOVER_RING_OPACITY);
+      this.playerRing = new HoverRing(this.stage.scene, USER_COLOR, PLAYER_RING_OPACITY);
+      this.syncFollowFromSelection(useUiStore.getState().selectedNpcIndex);
 
       this.engine.renderer.setAnimationLoop(this.animationLoop);
       document.addEventListener('visibilitychange', this.onVisibilityChange);
       this.unsubs.push(() => document.removeEventListener('visibilitychange', this.onVisibilityChange));
 
       this.settleReady();
+
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        (window as unknown as { __laPresence?: () => unknown }).__laPresence = () => this.getPresenceDebug();
+      }
 
       this.unsubs.push(useUiStore.subscribe((s, prev) => {
       if (s.instanceCount !== prev.instanceCount) this.controller?.setInstanceCount(s.instanceCount);
@@ -202,24 +292,11 @@ export class SceneManager {
            this._startChatVisuals(s.selectedNpcIndex);
         }
         
-        if (s.isChatting && s.selectedNpcIndex !== null) {
-          const npc = s.selectedNpcIndex, user = set.user.index;
-          if (this.controller.getState(npc) !== 'walk') this.controller.play(npc, s.isThinking ? 'talk' : 'listen');
-          this.controller.setSpeaking(npc, s.isThinking);
-          if (this.controller.getState(user) !== 'walk') this.controller.play(user, s.isTyping ? 'talk' : 'listen');
-          this.controller.setSpeaking(user, s.isTyping);
+        if (s.isChatting && s.selectedNpcIndex !== null && this.playerChatSession?.isActive) {
+          this._syncPlayerChatRoles(s.selectedNpcIndex, set.user.index, s.isThinking, s.isTyping);
         } else if (!s.isChatting && prev.isChatting) {
           // Cleanup Chat Visuals — keep follow on still-selected NPC (chat zoom exits via setChatMode)
-          const npc = prev.selectedNpcIndex;
-          const user = set.user.index;
-          if (npc !== null) {
-            this.driverManager?.getNpcDriver(npc)?.setChatting(false);
-            this.controller.setSpeaking(npc, false);
-            this.controller.play(npc, 'idle');
-            this.controller.poiManager.releaseAll(npc);
-          }
-          this.controller.setSpeaking(user, false);
-          this.controller.play(user, 'idle');
+          this._endPlayerChatVisuals(prev.selectedNpcIndex, set.user.index);
           this.syncFollowFromSelection(s.selectedNpcIndex);
         }
       }
@@ -245,6 +322,19 @@ export class SceneManager {
     }
   }
 
+  /**
+   * Selected agent's team color, cached by (index, team) so a held selection doesn't re-walk the
+   * (subagent-tree) agent list every frame just to read a color that hasn't changed.
+   */
+  private getSelectedAgentColor(index: number): string | undefined {
+    const setId = useTeamStore.getState().selectedAgentSetId;
+    const cache = this.selectedColorCache;
+    if (cache && cache.index === index && cache.setId === setId) return cache.color;
+    const color = getAllAgents(getActiveAgentSet()).find((a) => a.index === index)?.color;
+    this.selectedColorCache = { index, setId, color };
+    return color;
+  }
+
   /** Map UI selection → camera follow + click pick state. Null/player → follow player. */
   private syncFollowFromSelection(selectedNpcIndex: number | null): void {
     const player = getActiveAgentSet().user.index;
@@ -261,27 +351,450 @@ export class SceneManager {
     if (!this.controller) return;
     const pos = this.controller.getCPUPositions(); if (!pos) return;
     const set = getActiveAgentSet();
+    const user = set.user.index;
+
+    // Player chat preempts ambient social involving this NPC.
+    if (this.ambientSession?.isParticipant(npcIndex) || this.ambientMeetupPending?.a === npcIndex || this.ambientMeetupPending?.b === npcIndex) {
+      this._endAmbientSession();
+    }
+
+    const session = new ConversationSession(user, npcIndex);
+    session.begin();
+    this.playerChatSession = session;
+
     const npc = new THREE.Vector3(pos[npcIndex * 4], 0, pos[npcIndex * 4 + 2]);
-    const player = new THREE.Vector3(pos[set.user.index * 4], 0, pos[set.user.index * 4 + 2]);
+    const player = new THREE.Vector3(pos[user * 4], 0, pos[user * 4 + 2]);
+    const dist = player.distanceTo(npc);
     let dir = new THREE.Vector3().subVectors(player, npc).normalize();
     if (dir.length() < 0.01) dir.set(1, 0, 0);
-    const target = npc.clone().addScaledVector(dir, 1.2);
+    const target = npc.clone().addScaledVector(dir, CHAT_APPROACH_DISTANCE);
 
     this.syncFollowFromSelection(npcIndex);
     this.driverManager?.getNpcDriver(npcIndex)?.setChatting(true);
     this.controller.cancelMovement(npcIndex);
-    this.controller.play(npcIndex, 'listen');
+    this._applySessionRoles(session);
     this.controller.getAgentStateBuffer()?.setWaypoint(npcIndex, dir.x, dir.z);
-    this.driverManager?.getPlayerDriver()?.walkTo(target, 'listen', () => {
-      const p = this.controller!.getCPUPositions()!;
-      const fx = p[npcIndex * 4] - p[set.user.index * 4], fz = p[npcIndex * 4 + 2] - p[set.user.index * 4 + 2];
-      this.controller!.getAgentStateBuffer()?.setWaypoint(set.user.index, fx, fz);
-      this.controller!.getAgentStateBuffer()?.setWaypoint(npcIndex, -fx, -fz);
+
+    const onArrived = () => {
+      if (!this.controller || !this.playerChatSession?.isActive) return;
+      this._snapChatFacing(user, npcIndex);
+      this._applySessionRoles(this.playerChatSession);
       this._triggerNpcGreeting(npcIndex);
+    };
+
+    // Already close enough — skip walk, face + greet immediately.
+    if (dist <= CHAT_APPROACH_DISTANCE + 0.35) {
+      onArrived();
+      return;
+    }
+
+    const moved = this.driverManager?.getPlayerDriver()?.walkTo(target, 'listen', onArrived) ?? false;
+    if (!moved) {
+      this._abortPlayerChat('Couldn’t reach them — try moving closer.');
+    }
+  }
+
+  private _abortPlayerChat(message?: string): void {
+    const set = getActiveAgentSet();
+    const npc = useUiStore.getState().selectedNpcIndex;
+    this._endPlayerChatVisuals(npc, set.user.index);
+    useUiStore.getState().setChatting(false);
+    if (message) toast(message, 'error');
+  }
+
+  private _snapChatFacing(userIndex: number, npcIndex: number): void {
+    if (!this.controller || !this.playerChatSession) return;
+    const p = this.controller.getCPUPositions();
+    if (!p) return;
+    const facing = this.playerChatSession.facingDirs(
+      { x: p[userIndex * 4], z: p[userIndex * 4 + 2] },
+      { x: p[npcIndex * 4], z: p[npcIndex * 4 + 2] },
+    );
+    this.controller.characterManager.setFacing(userIndex, facing.a.x, facing.a.z);
+    this.controller.characterManager.setFacing(npcIndex, facing.b.x, facing.b.z);
+  }
+
+  /** Ease participants toward each other while approaching / hold facing while chatting. */
+  private _tickConversationFacing(delta: number, positions: Float32Array): void {
+    if (!this.controller) return;
+    const sessions: ConversationSession[] = [];
+    if (this.playerChatSession?.isActive) sessions.push(this.playerChatSession);
+    if (this.ambientSession?.isActive && this.ambientTalking) sessions.push(this.ambientSession);
+
+    for (const session of sessions) {
+      const [a, b] = session.participants;
+      const desired = session.facingDirs(
+        { x: positions[a * 4], z: positions[a * 4 + 2] },
+        { x: positions[b * 4], z: positions[b * 4 + 2] },
+      );
+      for (const [idx, want] of [[a, desired.a], [b, desired.b]] as const) {
+        // Don't fight walk facing while pathing toward the meetup / chat stand-off.
+        if (this.controller.isPathing(idx)) continue;
+        const wp = this.controller.getAgentStateBuffer()?.getWaypoint(idx);
+        const cur = wp && Math.hypot(wp.x, wp.z) > 1e-5
+          ? { x: wp.x, z: wp.z }
+          : this.controller.getWalkFacing(idx);
+        const next = blendFacingXZ(cur, want, CONVERSATION_FACE_TURN_RATE, delta);
+        this.controller.characterManager.setFacing(idx, next.x, next.z);
+      }
+    }
+
+    // During player approach, also ease the waiting NPC toward the player.
+    if (this.playerChatSession?.isActive) {
+      const [user, npc] = this.playerChatSession.participants;
+      if (this.controller.isPathing(user) && !this.controller.isPathing(npc)) {
+        const desired = this.playerChatSession.facingDirs(
+          { x: positions[user * 4], z: positions[user * 4 + 2] },
+          { x: positions[npc * 4], z: positions[npc * 4 + 2] },
+        );
+        const wp = this.controller.getAgentStateBuffer()?.getWaypoint(npc);
+        const cur = wp && Math.hypot(wp.x, wp.z) > 1e-5
+          ? { x: wp.x, z: wp.z }
+          : this.controller.getWalkFacing(npc);
+        const next = blendFacingXZ(cur, desired.b, CONVERSATION_FACE_TURN_RATE, delta);
+        this.controller.characterManager.setFacing(npc, next.x, next.z);
+      }
+    }
+  }
+
+  private _syncPlayerChatRoles(
+    npcIndex: number,
+    userIndex: number,
+    isThinking: boolean,
+    isTyping: boolean,
+  ): void {
+    if (!this.playerChatSession?.isActive) return;
+    if (isThinking) this.playerChatSession.setSpeaker(npcIndex);
+    else if (isTyping) this.playerChatSession.setSpeaker(userIndex);
+    else this.playerChatSession.setSpeaker(null);
+    this._applySessionRoles(this.playerChatSession);
+  }
+
+  private _applySessionRoles(session: ConversationSession): void {
+    if (!this.controller || !session.isActive) return;
+    for (const idx of session.participants) {
+      const role = session.roleOf(idx);
+      if (this.controller.getState(idx) !== 'walk') {
+        this.controller.play(idx, role);
+      }
+      this.controller.setSpeaking(idx, role === 'talk');
+    }
+  }
+
+  private _returnNpcAfterChat(npcIndex: number): void {
+    if (!this.controller) return;
+    const core = useCoreStore.getState();
+    const onHold = core.tasks.find((t) => t.status === 'on_hold' && t.assignedAgentId === npcIndex);
+    const inProgress = core.tasks.find((t) => t.status === 'in_progress' && t.assignedAgentId === npcIndex);
+    if (onHold) {
+      this.moveNpcToBoardroom(npcIndex);
+    } else if (inProgress) {
+      this.setNpcWorking(npcIndex, true);
+    } else {
+      this.controller.play(npcIndex, 'idle');
+    }
+  }
+
+  private _endPlayerChatVisuals(npcIndex: number | null, userIndex: number): void {
+    if (!this.controller) return;
+    this.playerChatSession?.end();
+    this.playerChatSession = null;
+    this.listenerMicrobeatTimer = 0;
+    if (npcIndex !== null) {
+      this.driverManager?.getNpcDriver(npcIndex)?.setChatting(false);
+      this.controller.setSpeaking(npcIndex, false);
+      this.controller.cancelMovement(userIndex);
+      this._returnNpcAfterChat(npcIndex);
+    }
+    this.controller.setSpeaking(userIndex, false);
+    if (this.controller.getState(userIndex) !== 'walk') {
+      this.controller.play(userIndex, 'idle');
+    }
+  }
+
+  private _endAmbientSession(): void {
+    if (!this.controller) return;
+    const participants = this.ambientSession?.participants
+      ?? (this.ambientMeetupPending ? [this.ambientMeetupPending.a, this.ambientMeetupPending.b] as const : null);
+    if (participants) {
+      for (const idx of participants) {
+        this.driverManager?.getNpcDriver(idx)?.setChatting(false);
+        this.controller.setSpeaking(idx, false);
+        this.controller.cancelMovement(idx);
+        const st = this.controller.getState(idx);
+        if (st === 'talk' || st === 'listen' || st === 'walk') {
+          this.controller.play(idx, 'idle');
+        }
+        this.ambientNpcIndices.delete(idx);
+      }
+    }
+    this.ambientSession?.end();
+    this.ambientSession = null;
+    this.ambientTalking = false;
+    this.ambientMeetupPending = null;
+    this.socialDirector.cancelAmbient();
+  }
+
+  private _beginAmbientMeetup(a: number, b: number, positions: Float32Array): void {
+    if (!this.controller) return;
+    const ax = positions[a * 4];
+    const az = positions[a * 4 + 2];
+    const bx = positions[b * 4];
+    const bz = positions[b * 4 + 2];
+    const mx = (ax + bx) * 0.5;
+    const mz = (az + bz) * 0.5;
+    let dx = bx - ax;
+    let dz = bz - az;
+    let len = Math.hypot(dx, dz);
+    if (len < 1e-5) {
+      dx = 1;
+      dz = 0;
+      len = 1;
+    } else {
+      dx /= len;
+      dz /= len;
+    }
+    const half = SOCIAL_AMBIENT_PAIR_RADIUS * 0.5;
+    const targetA = new THREE.Vector3(mx - dx * half, 0, mz - dz * half);
+    const targetB = new THREE.Vector3(mx + dx * half, 0, mz + dz * half);
+
+    this.ambientMeetupPending = { a, b, arrivedA: false, arrivedB: false };
+    this.ambientTalking = false;
+    this.ambientSession = null;
+
+    for (const idx of [a, b]) {
+      this.driverManager?.getNpcDriver(idx)?.setChatting(true);
+      this.ambientNpcIndices.add(idx);
+      this.controller.cancelMovement(idx);
+    }
+
+    const tryStartTalk = () => {
+      const pending = this.ambientMeetupPending;
+      if (!pending || !pending.arrivedA || !pending.arrivedB || !this.controller) return;
+      const session = new ConversationSession(pending.a, pending.b);
+      session.begin();
+      session.setSpeaker(pending.a);
+      this.ambientSession = session;
+      this.ambientTalking = true;
+      this.ambientMeetupPending = null;
+      const pos = this.controller.getCPUPositions();
+      if (pos) {
+        const facing = session.facingDirs(
+          { x: pos[pending.a * 4], z: pos[pending.a * 4 + 2] },
+          { x: pos[pending.b * 4], z: pos[pending.b * 4 + 2] },
+        );
+        this.controller.characterManager.setFacing(pending.a, facing.a.x, facing.a.z);
+        this.controller.characterManager.setFacing(pending.b, facing.b.x, facing.b.z);
+      }
+      this._applySessionRoles(session);
+    };
+
+    // Already close — talk immediately.
+    if (len <= SOCIAL_AMBIENT_PAIR_RADIUS + 0.4) {
+      this.ambientMeetupPending = { a, b, arrivedA: true, arrivedB: true };
+      tryStartTalk();
+      return;
+    }
+
+    const movedA = this.controller.moveTo(a, targetA, 'listen', () => {
+      if (this.ambientMeetupPending) this.ambientMeetupPending.arrivedA = true;
+      tryStartTalk();
     });
+    const movedB = this.controller.moveTo(b, targetB, 'listen', () => {
+      if (this.ambientMeetupPending) this.ambientMeetupPending.arrivedB = true;
+      tryStartTalk();
+    });
+    if (!movedA || !movedB) {
+      this._endAmbientSession();
+    }
+  }
+
+  private _tickListenerMicrobeats(delta: number): void {
+    if (!this.controller) return;
+    const session = this.playerChatSession?.isActive
+      ? this.playerChatSession
+      : (this.ambientTalking && this.ambientSession?.isActive ? this.ambientSession : null);
+    if (!session) {
+      this.listenerMicrobeatTimer = 0;
+      return;
+    }
+    this.listenerMicrobeatTimer += delta;
+    if (this.listenerMicrobeatTimer < LISTENER_MICROBEAT_INTERVAL) return;
+    this.listenerMicrobeatTimer = 0;
+
+    for (const idx of session.participants) {
+      if (session.roleOf(idx) !== 'listen') continue;
+      if (this.controller.getState(idx) !== 'listen') continue;
+      if (Math.random() > 0.45) continue;
+      this.controller.play(idx, 'look_around');
+      // look_around auto-returns to idle via state machine — re-assert listen shortly
+      const sessionRef = session;
+      window.setTimeout(() => {
+        if (!this.controller || !sessionRef.isActive) return;
+        if (sessionRef.roleOf(idx) === 'listen' && this.controller.getState(idx) === 'idle') {
+          this.controller.play(idx, 'listen');
+        }
+      }, 900);
+      break;
+    }
+  }
+
+  private _tickPresence(delta: number, positions: Float32Array): void {
+    if (!this.controller) return;
+    const set = getActiveAgentSet();
+    const player = set.user.index;
+    const ui = useUiStore.getState();
+
+    this._tickConversationFacing(delta, positions);
+    this._tickListenerMicrobeats(delta);
+
+    // Hover reactions (Wave 3) — skip player and while chatting.
+    if (!ui.isChatting) {
+      const hovered = ui.hoveredNpcIndex;
+      const reaction = this.hoverReactions.tick(
+        hovered !== null && hovered !== player ? hovered : null,
+        performance.now(),
+      );
+      if (reaction && hovered !== null) {
+        const st = this.controller.getState(hovered);
+        if (st === 'idle' || st === 'look_around') {
+          this.controller.play(hovered, reaction);
+        }
+      }
+    }
+
+    // Social director (Wave 4/5)
+    const agents = getAllAgents(set).map((a) => {
+      const busy = useCoreStore.getState().tasks.some(
+        (t) => t.assignedAgentId === a.index && (t.status === 'in_progress' || t.status === 'on_hold' || t.status === 'scheduled'),
+      );
+      return {
+        index: a.index,
+        x: positions[a.index * 4],
+        z: positions[a.index * 4 + 2],
+        state: this.controller!.getState(a.index),
+        pathing: this.controller!.isPathing(a.index),
+        busy,
+        inPlayerChat: this.playerChatSession?.isParticipant(a.index) ?? false,
+      };
+    });
+
+    const hasAmbient = !!(this.ambientSession?.isActive || this.ambientMeetupPending);
+
+    // Cursor companion owns body language — no ambient social meetups/notices.
+    if (usePresenceStore.getState().mirrorMode) {
+      if (this.ambientSession?.isActive) this._endAmbientSession();
+      this.mirrorRetryAccum += delta;
+      if (this.mirrorRetryAccum >= 0.5) {
+        this.mirrorRetryAccum = 0;
+        this.retryUnsatisfiedMirrorPlacements();
+      }
+      return;
+    }
+
+    const actions = this.socialDirector.update(delta, {
+      agents,
+      playerIndex: player,
+      playerX: positions[player * 4],
+      playerZ: positions[player * 4 + 2],
+      hasAmbientSession: hasAmbient,
+      hasPlayerSession: !!this.playerChatSession?.isActive,
+      ambientTalking: this.ambientTalking,
+    });
+
+    for (const action of actions) {
+      if (action.type === 'ambient_meetup') {
+        this._beginAmbientMeetup(action.a, action.b, positions);
+      } else if (action.type === 'ambient_tick' && this.ambientSession?.isActive) {
+        this.ambientSession.setSpeaker(action.speaker);
+        this._applySessionRoles(this.ambientSession);
+      } else if (action.type === 'ambient_end') {
+        this._endAmbientSession();
+      } else if (action.type === 'notice') {
+        const st = this.controller.getState(action.index);
+        if (st === 'idle' || st === 'look_around') {
+          this.controller.play(action.index, action.reaction as CharacterStateKey);
+        }
+      }
+    }
+  }
+
+  /** Player waves; selected NPC reacts (Wave 5). */
+  public waveAtSelected(): void {
+    if (!this.controller) return;
+    const idx = useUiStore.getState().selectedNpcIndex;
+    if (idx === null || useUiStore.getState().isChatting) return;
+    const player = getActiveAgentSet().user.index;
+    if (idx === player) return;
+
+    const pos = this.controller.getCPUPositions();
+    if (pos) {
+      const facing = {
+        x: pos[idx * 4] - pos[player * 4],
+        z: pos[idx * 4 + 2] - pos[player * 4 + 2],
+      };
+      const plen = Math.hypot(facing.x, facing.z) || 1;
+      this.controller.characterManager.setFacing(player, facing.x / plen, facing.z / plen);
+      this.controller.characterManager.setFacing(idx, -facing.x / plen, -facing.z / plen);
+    }
+
+    const pst = this.controller.getState(player);
+    if (pst === 'idle' || pst === 'look_around' || pst === 'listen') {
+      this.controller.play(player, 'wave');
+    }
+
+    if (this.waveReactTimeout) clearTimeout(this.waveReactTimeout);
+    this.waveReactTimeout = setTimeout(() => {
+      this.waveReactTimeout = null;
+      if (!this.controller || useUiStore.getState().isChatting) return;
+      const st = this.controller.getState(idx);
+      if (st === 'idle' || st === 'look_around' || st === 'listen') {
+        this.controller.play(idx, Math.random() < 0.6 ? 'wave' : 'look_around');
+      }
+    }, 450);
+  }
+
+  /** DEV: dump presence sessions for QA. */
+  public getPresenceDebug() {
+    const agents = getMirrorNpcAgents(getActiveAgentSet()).map((a) => {
+      const snap = this.mirrorDirector.snapshot(a.index);
+      const desired = this.mirrorDirector.getDesired(a.index);
+      const active = this.mirrorDirector.getActive(a.index);
+      const pos = this.controller?.getCPUPosition(a.index);
+      return {
+        index: a.index,
+        name: a.name,
+        state: this.controller?.getState(a.index),
+        pathing: this.controller ? this.isMirrorPathing(a.index) : false,
+        desired: desired ? `${desired.placement}:${desired.characterState}` : null,
+        active: active ? `${active.placement}:${active.characterState}` : null,
+        pending: snap.pending
+          ? `${snap.pending.placement}:${snap.pending.characterState}`
+          : null,
+        inFlight: snap.inFlight,
+        arrived: snap.arrived,
+        holdUntil: snap.holdUntil,
+        failCount: snap.failCount,
+        atPlacement: active ? this.isAtMirrorPlacement(a.index, active) : false,
+        pos: pos ? { x: +pos.x.toFixed(2), z: +pos.z.toFixed(2) } : null,
+      };
+    });
+    return {
+      playerChat: this.playerChatSession?.isActive
+        ? { participants: this.playerChatSession.participants, roles: this.playerChatSession.participants.map((i) => this.playerChatSession!.roleOf(i)) }
+        : null,
+      ambient: this.ambientSession?.isActive
+        ? { participants: this.ambientSession.participants, talking: this.ambientTalking }
+        : null,
+      meetup: this.ambientMeetupPending,
+      agents,
+      lounge: this.poiManager.getPoisByPrefix('sit_idle').filter((p) => /^sit_idle-\d+$/.test(p.id)).map((p) => ({ id: p.id, occupiedBy: p.occupiedBy })),
+      desks: this.poiManager.getPoisByPrefix('sit_work').map((p) => ({ id: p.id, occupiedBy: p.occupiedBy })),
+    };
   }
 
   public startChat(npcIndex: number): void {
+    useUiStore.getState().setSelectedNpc(npcIndex);
     useUiStore.getState().setChatting(true);
   }
 
@@ -312,11 +825,453 @@ export class SceneManager {
       const playerIndex = activeSet.user.index;
       this.driverManager.dispose();
       this.driverManager.registerPlayer(playerIndex);
-      getAllAgents(activeSet).forEach((a) => {
+      const npcs =
+        activeSet.id === CURSOR_MIRROR_SET_ID
+          ? getMirrorNpcAgents(activeSet)
+          : getAllAgents(activeSet);
+      npcs.forEach((a) => {
         if (a.index !== playerIndex) this.driverManager!.registerNpc(a.index, a);
       });
     }
   }
+
+  /** Rebuild simulation + drivers for a live mirror roster without changing team id. */
+  public applyAgentSet(activeSet: AgenticSystem): void {
+    this.applyMirrorRoster(activeSet, {
+      warpIndices: getMirrorNpcAgents(activeSet).map((a) => a.index),
+    });
+  }
+
+  /**
+   * Apply a mirror roster. Only warps the given indices (new spawns).
+   * Pass empty warpIndices when count changed but existing agents should keep seats
+   * (caller decides which indices are new).
+   */
+  public applyMirrorRoster(
+    activeSet: AgenticSystem,
+    options: { warpIndices?: number[]; empty?: boolean } = {},
+  ): void {
+    this.lastAgentSetId = activeSet.id;
+    this.reinitializeSimulation(activeSet);
+    this.worldManager?.updateThemeColor(activeSet.color);
+    if (!this.controller) return;
+
+    // Preserve positions across color buffer rebuild, then warp only new spawns.
+    this.controller.refreshColorsPreservingPositions();
+    this.characterManager.reapplyPresenceDims(this.mirrorDimmed);
+    const warp = options.warpIndices ?? [];
+    if (warp.length > 0) {
+      this.controller.warpIndicesToSpawn(warp);
+      this.controller.pulseSpawn(warp);
+      for (const i of warp) {
+        this.mirrorDirector.clearIndex(i);
+      }
+      // Spectator framing when new workers appear.
+      if (usePresenceStore.getState().mirrorMode) {
+        useUiStore.getState().setSelectedNpc(null);
+        this.stage.frameOfficeOverview(false);
+        this.parkMirrorPlayerOffstage(activeSet.user.index);
+      }
+    } else if (options.empty && usePresenceStore.getState().mirrorMode) {
+      useUiStore.getState().setSelectedNpc(null);
+      this.stage.frameOfficeOverview(false);
+      this.parkMirrorPlayerOffstage(activeSet.user.index);
+    }
+  }
+
+  /** Soft spawn pop for mirror agents. */
+  public pulseMirrorSpawn(indices: number[]): void {
+    this.controller?.pulseSpawn(indices);
+  }
+
+  /** Soft refresh for appearance edits — no driver rebuild, no teleport. */
+  public refreshMirrorAppearance(activeSet: AgenticSystem): void {
+    this.worldManager?.updateThemeColor(activeSet.color);
+    this.controller?.refreshColorsPreservingPositions();
+  }
+
+  /** Keep the unused player avatar out of the companion office (avoids ghost stacking). */
+  private parkMirrorPlayerOffstage(playerIndex: number): void {
+    if (!this.controller) return;
+    this.controller.cancelMovement(playerIndex);
+    this.poiManager.releaseAll(playerIndex);
+    const away = new THREE.Vector3(-12, 0, -12);
+    this.characterManager.setPositionAndZeroVelocity(playerIndex, away);
+    const buffer = this.controller.getAgentStateBuffer();
+    buffer?.setAlpha(playerIndex, 0);
+  }
+
+  /** Soft pose nudge for Cursor presence (thinking / done beats). */
+  public playPresencePose(index: number, state: CharacterStateKey): void {
+    if (!this.controller) return;
+    if (this.controller.getState(index) === 'walk') return;
+    if (this.controller.isPathing(index)) return;
+    this.controller.play(index, state);
+  }
+
+  /**
+   * Cursor companion body language:
+   * lead on stage; working specialists at desks; thinkers at whiteboard; idle on real lounge seats.
+   */
+  public applyMirrorPresence(index: number, behavior: PresenceBehavior): void {
+    if (!this.controller) return;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return;
+
+    // Always apply visual flags from the latest event.
+    this.setPresenceDim(index, behavior.dimmed);
+    this.controller.setSpeaking(index, behavior.speaking);
+
+    const cur = this.controller.getState(index);
+    const pathing = this.isMirrorPathing(index);
+    const blocking = cur === 'stand' || cur === 'sit_down';
+    const loco = this.mirrorDirector.setIntent(index, behavior, {
+      pathing,
+      blockingTransition: blocking,
+    });
+
+    this.tryMirrorPlacement(index, loco);
+    // Bubble follows latest presence intent (Working gated on arrival of active loco).
+    this.publishMirrorBubble(index, behavior);
+  }
+
+  /** Working bubble only after arrival — walking agents stay quiet. */
+  private publishMirrorBubble(index: number, behavior: PresenceBehavior): void {
+    const key = mirrorPlacementKey(behavior.placement, behavior.characterState);
+    const arrived = this.mirrorDirector.getArrived(index) === key;
+    const primary =
+      behavior.bubblePrimary === 'Working'
+        ? arrived
+          ? 'Working'
+          : ''
+        : behavior.bubblePrimary;
+    const prev = usePresenceStore.getState().agentStatusTexts;
+    if (prev[index] === primary) return;
+    usePresenceStore.getState().setAgentStatusTexts({ ...prev, [index]: primary });
+  }
+
+  private retryUnsatisfiedMirrorPlacements(): void {
+    for (const [index] of this.mirrorDirector.entries()) {
+      const cur = this.controller?.getState(index);
+      const pathing = this.isMirrorPathing(index);
+      const blocking = cur === 'stand' || cur === 'sit_down';
+      const promoted = this.mirrorDirector.promotePending(index, {
+        pathing,
+        blockingTransition: !!blocking,
+      });
+      const active = promoted ?? this.mirrorDirector.getActive(index);
+      if (!active) continue;
+      this.tryMirrorPlacement(index, active);
+      const latest = this.mirrorDirector.getDesired(index);
+      if (latest) this.publishMirrorBubble(index, latest);
+    }
+  }
+
+  private isMirrorPathing(index: number): boolean {
+    if (!this.controller) return false;
+    const cur = this.controller.getState(index);
+    return this.controller.isPathing(index) || cur === 'walk' || cur === 'stand' || cur === 'sit_down';
+  }
+
+  private isNearPoint(index: number, target: THREE.Vector3, radius = 0.95): boolean {
+    const p = this.controller?.getCPUPosition(index);
+    if (!p) return false;
+    const dx = p.x - target.x;
+    const dz = p.z - target.z;
+    return dx * dx + dz * dz <= radius * radius;
+  }
+
+  private mirrorBoardTarget(index: number): THREE.Vector3 {
+    const poi = this.poiManager.getPoi('area-board') || this.poiManager.getPoi('idle-area-boardroom');
+    const target = poi?.position.clone() ?? new THREE.Vector3(3.0, 0, -1.55);
+    const slot = Math.max(0, index - 1);
+    target.x += (slot % 3) * 0.55 - 0.55;
+    target.z += Math.floor(slot / 3) * 0.4;
+    this.navMesh.projectOntoNavMesh(target);
+    return target;
+  }
+
+  private mirrorStageTarget(index: number): THREE.Vector3 {
+    const poi = this.poiManager.getPoi('area-stage');
+    const target = poi?.position.clone() ?? new THREE.Vector3(-0.35, 0, 0.55);
+    if (index !== 1) {
+      const slot = Math.max(0, index - 2);
+      const angle = (slot * Math.PI * 2) / 5;
+      target.x += Math.cos(angle) * 0.55;
+      target.z += Math.sin(angle) * 0.55;
+    }
+    this.navMesh.projectOntoNavMesh(target);
+    return target;
+  }
+
+  private isAtMirrorPlacement(index: number, behavior: PresenceBehavior): boolean {
+    if (!this.controller) return false;
+    const cur = this.controller.getState(index);
+    if (behavior.placement === 'lounge') return cur === 'sit_idle';
+    if (behavior.placement === 'desk') return cur === 'sit_work';
+    if (behavior.placement === 'board') {
+      if (!(cur === 'look_around' || cur === 'talk' || cur === 'idle' || cur === 'happy')) return false;
+      return this.isNearPoint(index, this.mirrorBoardTarget(index), 1.15);
+    }
+    if (!(cur === 'talk' || cur === 'idle' || cur === 'look_around' || cur === 'happy')) return false;
+    return this.isNearPoint(index, this.mirrorStageTarget(index), 1.05);
+  }
+
+  /** Attempt locomotion toward desired placement. Arrival only when pose+place match. */
+  private tryMirrorPlacement(index: number, behavior: PresenceBehavior): boolean {
+    if (!this.controller) return false;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return false;
+
+    this.setPresenceDim(index, behavior.dimmed);
+    this.controller.setSpeaking(index, behavior.speaking);
+
+    const pos = this.controller.getCPUPosition(index);
+    const invalid =
+      !pos ||
+      !Number.isFinite(pos.x) ||
+      !Number.isFinite(pos.z) ||
+      Math.abs(pos.x) > 18 ||
+      Math.abs(pos.z) > 18;
+    if (invalid) {
+      const spawn = this.poiManager.getPoisByPrefix('spawn')[0]?.position
+        ?? new THREE.Vector3(-3.1, 0, -4.4);
+      this.controller.cancelMovement(index);
+      this.characterManager.setPositionAndZeroVelocity(index, spawn.clone());
+      this.mirrorDirector.clearArrived(index);
+      this.mirrorDirector.clearInFlight(index);
+    }
+
+    const placementKey = mirrorPlacementKey(behavior.placement, behavior.characterState);
+    const pathing = this.isMirrorPathing(index);
+    const cur = this.controller.getState(index);
+
+    if (this.isAtMirrorPlacement(index, behavior)) {
+      this.mirrorDirector.markArrived(index, placementKey);
+      if (
+        (behavior.placement === 'lounge' || behavior.placement === 'desk') &&
+        (cur === 'sit_idle' || cur === 'sit_work') &&
+        cur !== behavior.characterState &&
+        (behavior.characterState === 'sit_idle' || behavior.characterState === 'sit_work')
+      ) {
+        this.controller.play(index, behavior.characterState);
+      } else if (
+        (behavior.placement === 'stage' || behavior.placement === 'board') &&
+        cur !== behavior.characterState &&
+        (cur === 'talk' || cur === 'idle' || cur === 'look_around' || cur === 'happy')
+      ) {
+        this.controller.play(index, behavior.characterState);
+      }
+      this.publishMirrorBubble(index, behavior);
+      return true;
+    }
+
+    this.mirrorDirector.clearArrived(index);
+    this.publishMirrorBubble(index, behavior);
+
+    // Already walking/standing toward this placement — let it finish.
+    if (pathing && this.mirrorDirector.getInFlight(index) === placementKey) return true;
+
+    // Wrong destination in progress — cancel walks (wait out stand/sit_down clips).
+    if (pathing) {
+      if (cur === 'stand' || cur === 'sit_down') return false;
+      this.controller.cancelMovement(index);
+      this.mirrorDirector.clearInFlight(index);
+    }
+
+    let started = false;
+    if (behavior.placement === 'lounge') {
+      started = this.sendNpcToLounge(index);
+    } else if (behavior.placement === 'desk') {
+      started = this.sendNpcToDesk(index);
+    } else if (behavior.placement === 'board') {
+      started = this.sendNpcToBoard(index, behavior.characterState);
+    } else {
+      started = this.sendNpcToStage(index, behavior.characterState);
+    }
+
+    if (started) this.mirrorDirector.markInFlight(index, placementKey);
+    else this.mirrorDirector.clearInFlight(index);
+    return started;
+  }
+
+  public setPresenceDim(index: number, dimmed: boolean): void {
+    this.mirrorDimmed.set(index, dimmed);
+    this.characterManager.setPresenceDim(index, dimmed);
+  }
+
+  /** Stage + whiteboard markers. Lounge seats come only from the office GLB. */
+  private ensureMirrorStagingPois(): void {
+    for (const id of [
+      'sit_idle-couch-a',
+      'sit_idle-couch-b',
+      'sit_idle-couch-c',
+      'sit_idle-couch-d',
+      'sit_idle-couch-e',
+      'sit_idle-couch-f',
+    ]) {
+      this.poiManager.removePoi(id);
+    }
+
+    if (!this.poiManager.getPoi('area-stage')) {
+      this.poiManager.addPoi({
+        id: 'area-stage',
+        // Open floor near the meeting table — reads as “center stage”, not a PC desk.
+        position: new THREE.Vector3(-0.35, 0, 0.55),
+        quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI),
+        arrivalState: 'idle',
+        occupiedBy: null,
+        label: 'Stage',
+      });
+    } else {
+      // Keep existing marker but nudge if it was the old corridor point.
+      const stage = this.poiManager.getPoi('area-stage');
+      if (stage && Math.abs(stage.position.x - 0.15) < 0.05 && Math.abs(stage.position.z + 0.35) < 0.05) {
+        stage.position.set(-0.35, 0, 0.55);
+      }
+    }
+
+    if (!this.poiManager.getPoi('area-board')) {
+      this.poiManager.addPoi({
+        id: 'area-board',
+        position: new THREE.Vector3(3.0, 0, -1.55),
+        quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI),
+        arrivalState: 'idle',
+        occupiedBy: null,
+        label: 'Whiteboard',
+      });
+    }
+  }
+
+  private sendNpcToLounge(index: number): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    const seats = this.poiManager
+      .getPoisByPrefix('sit_idle')
+      .filter((p) => /^sit_idle-\d+$/.test(p.id))
+      .map((p) => ({
+        id: p.id,
+        occupiedBy: p.occupiedBy,
+        x: p.position.x,
+        z: p.position.z,
+      }));
+    const from = this.controller.getCPUPosition(index);
+    const poiRef = from
+      ? assignMirrorSeatNear(seats, index, { x: from.x, z: from.z })
+      : seats[0] ?? null;
+    if (!poiRef) return false;
+    const poi = this.poiManager.getPoi(poiRef.id);
+    if (!poi) return false;
+
+    const cur = this.controller.getState(index);
+    if (poi.occupiedBy === index && (cur === 'sit_idle' || cur === 'sit_down')) return true;
+    if (poi.occupiedBy !== index) {
+      this.poiManager.releaseAll(index);
+      this.poiManager.occupy(poi.id, index);
+    }
+    const ok = this.controller.walkToPoi(index, poi.id);
+    if (!ok) {
+      if (poi.occupiedBy === index) this.poiManager.release(poi.id);
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToDesk(index: number): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    const desks = this.poiManager.getPoisByPrefix('sit_work').map((p) => ({
+      id: p.id,
+      occupiedBy: p.occupiedBy,
+      x: p.position.x,
+      z: p.position.z,
+    }));
+    const from = this.controller.getCPUPosition(index);
+    const poiRef = from
+      ? assignMirrorSeatNear(desks, index, { x: from.x, z: from.z })
+      : desks[0] ?? null;
+    if (!poiRef) return false;
+    const poi = this.poiManager.getPoi(poiRef.id);
+    if (!poi) return false;
+
+    const cur = this.controller.getState(index);
+    if (poi.occupiedBy === index && (cur === 'sit_work' || cur === 'sit_down')) return true;
+    if (poi.occupiedBy !== index) {
+      this.poiManager.releaseAll(index);
+      this.poiManager.occupy(poi.id, index);
+    }
+    const ok = this.controller.walkToPoi(index, poi.id);
+    if (!ok) {
+      if (poi.occupiedBy === index) this.poiManager.release(poi.id);
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToBoard(index: number, pose: CharacterStateKey): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    this.poiManager.releaseAll(index);
+    const target = this.mirrorBoardTarget(index);
+    const faceBoard = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+    const ok = this.controller.moveTo(index, target, pose, undefined, undefined, faceBoard);
+    if (!ok) {
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  private sendNpcToStage(index: number, pose: CharacterStateKey): boolean {
+    if (!this.controller) return false;
+    this.ensureMirrorNavFoothold(index);
+    this.poiManager.releaseAll(index);
+    const target = this.mirrorStageTarget(index);
+    const poi = this.poiManager.getPoi('area-stage');
+    const quat = poi?.quaternion;
+    const ok = this.controller.moveTo(index, target, pose, undefined, undefined, quat);
+    if (!ok) {
+      if (this.mirrorDirector.noteWalkResult(index, false)) this.forceMirrorEscape(index);
+    } else {
+      this.mirrorDirector.noteWalkResult(index, true);
+    }
+    return ok;
+  }
+
+  /** Pull agents out of sofa/desk nav holes so pathfinding can start. */
+  private ensureMirrorNavFoothold(index: number): void {
+    if (!this.controller) return;
+    const p = this.controller.getCPUPosition(index);
+    if (!p) return;
+
+    const canary = this.mirrorStageTarget(1);
+    const pathable = this.navMesh.isPointOnNavMesh(p) && this.navMesh.findPath(p, canary).length > 0;
+    if (pathable) return;
+
+    const snapped = p.clone();
+    if (this.navMesh.projectOntoNavMesh(snapped) && this.navMesh.findPath(snapped, canary).length > 0) {
+      this.characterManager.setPositionAndZeroVelocity(index, snapped);
+      return;
+    }
+    // Do not escape here — wait for consecutive walk failures via the director.
+  }
+
+  /** Soft recovery to a walkable spawn — never snap onto furniture. */
+  private forceMirrorEscape(index: number): void {
+    if (!this.controller) return;
+    this.controller.cancelMovement(index);
+    this.mirrorDirector.clearInFlight(index);
+    this.mirrorDirector.resetFails(index);
+    const spawns = this.poiManager.getPoisByPrefix('spawn');
+    const spawn = spawns[(Math.max(0, index - 1)) % Math.max(spawns.length, 1)] ?? spawns[0];
+    const foothold = (spawn?.position.clone() ?? new THREE.Vector3(-3.1, 0, -4.4));
+    this.navMesh.projectOntoNavMesh(foothold);
+    this.characterManager.setPositionAndZeroVelocity(index, foothold);
+  }
+
   public setCoreHandler(handler: ((npcIndex: number, text: string) => Promise<string | null>) | null): void {
     this.coreHandler = handler;
   }
@@ -328,13 +1283,14 @@ export class SceneManager {
     return lead?.brain || null;
   }
 
-  /** 
+  /**
    * SMART DESK ASSIGNMENT
-   * Attempts to find a work POI. If work-${index} is missing, it picks 
+   * Attempts to find a work POI. If work-${index} is missing, it picks
    * a desk from the 'sit_work' group based on the agent's unique index.
    */
   public setNpcWorking(index: number, working: boolean): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
     if (working) {
       const id = `sit_work-${index}`;
       let poi = this.poiManager.getPoi(id);
@@ -349,6 +1305,14 @@ export class SceneManager {
   
   public setNpcTalking(index: number, talking: boolean): void {
     if (!this.controller) return;
+    if (index < 0 || index >= (useUiStore.getState().instanceCount || 0)) return;
+    // Player chat session owns body language for its participants.
+    if (this.playerChatSession?.isParticipant(index)) {
+      if (talking) this.playerChatSession.setSpeaker(index);
+      else if (this.playerChatSession.roleOf(index) === 'talk') this.playerChatSession.setSpeaker(null);
+      this._applySessionRoles(this.playerChatSession);
+      return;
+    }
     if (talking) {
       if (this.controller.getState(index) !== 'walk') this.controller.play(index, 'talk');
       this.controller.setSpeaking(index, true);
@@ -361,6 +1325,7 @@ export class SceneManager {
 
   public moveNpcToBoardroom(index: number): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) return;
     const poi = this.poiManager.getPoi('area-boardroom') || this.poiManager.getPoi('boardroom');
     if (poi) {
       this.controller.walkToPoi(index, poi.id, () => {
@@ -372,6 +1337,10 @@ export class SceneManager {
 
   public moveNpcToSpawn(index: number, onArrival?: () => void): void {
     if (!this.controller) return;
+    if (shouldIgnoreCoreTaskLocomotion(usePresenceStore.getState().mirrorMode)) {
+      onArrival?.();
+      return;
+    }
     const poi = this.poiManager.getPoi(`spawn-${index}`);
     if (poi) this.controller.moveTo(index, poi.position, 'idle', onArrival, undefined, poi.quaternion);
     else if (onArrival) onArrival();
@@ -405,18 +1374,49 @@ export class SceneManager {
 
   private animate() {
     this.engine.timer.update(); const delta = this.engine.timer.getDelta();
-    this.stage.update(); this.controller?.update(delta, this.engine.renderer);
+    this.stage.update(delta); this.controller?.update(delta, this.engine.renderer);
+    this.worldManager.update(delta);
     this.controller?.syncFromGPU(this.engine.renderer).then((pos) => {
       if (!pos || !this.controller) return;
       this.controller.updatePaths(pos); this.driverManager?.update(pos, delta);
       this.updateTransparency(pos, delta);
+      this._tickPresence(delta, pos);
     });
     const player = getActiveAgentSet().user.index;
     const ui = useUiStore.getState();
     const { selectedNpcIndex, setSelectedPosition, selectedPosition, isChatting } = ui;
 
     // Roam / select follow (NPC or player). Chat framing overrides look-at via setChatSubjects.
-    this.stage.setFollowTarget(this.controller?.getCPUPosition(this.selectedIndex ?? player) ?? null);
+    const followPos = this.controller?.getCPUPosition(this.selectedIndex ?? player) ?? null;
+    this.stage.setFollowTarget(followPos);
+
+    // Ground ring under selected NPC (hidden when following the player). Mutually exclusive with
+    // playerRing below by construction — both gate on `this.selectedIndex === null`, so an NPC
+    // selection and the player's self-follow ring can never render at the same feet simultaneously.
+    if (this.selectionRing) {
+      if (this.selectedIndex !== null) {
+        const color = this.getSelectedAgentColor(this.selectedIndex);
+        const ringPos = this.controller?.getCPUPosition(this.selectedIndex) ?? null;
+        this.selectionRing.update(ringPos, color, delta, this.selectedIndex);
+      } else {
+        this.selectionRing.update(null);
+      }
+    }
+
+    // Dim hover ring on a moused-over, unselected NPC (skip the player — it has its own follow ring
+    // below — and skip entirely while chatting, since orbit/hover input is a free-roam affordance).
+    if (this.hoverRing) {
+      const hoveredIdx = ui.hoveredNpcIndex;
+      const showHover = !isChatting && hoveredIdx !== null && hoveredIdx !== this.selectedIndex && hoveredIdx !== player;
+      this.hoverRing.update(showHover ? this.controller?.getCPUPosition(hoveredIdx) ?? null : null);
+    }
+
+    // Subtle non-pulsing ring under the player while the camera follows self (no NPC selected).
+    if (this.playerRing) {
+      const mirror = usePresenceStore.getState().mirrorMode;
+      const showPlayerRing = !mirror && this.selectedIndex === null && !isChatting;
+      this.playerRing.update(showPlayerRing ? this.controller?.getCPUPosition(player) ?? null : null);
+    }
 
     // While chatting, feed both bodies so Stage can ease into a midpoint conversation shot.
     if (isChatting && this.controller && selectedNpcIndex !== null && selectedNpcIndex !== player) {
@@ -429,11 +1429,16 @@ export class SceneManager {
 
     const npcScreenPositions: Record<number, { x: number; y: number }> = {};
     const rect = this.container.getBoundingClientRect();
+    const mirror = usePresenceStore.getState().mirrorMode;
     if (this.controller) {
       for (let i = 0; i < this.controller.getCount(); i++) {
+        // Hidden player avatar must not steal nameplates/bubbles in companion mode.
+        if (mirror && i === player) continue;
         const p = this.controller.getCPUPosition(i);
         if (p) {
           const s = p.clone(); s.y += BUBBLE_Y_OFFSET; s.project(this.stage.camera);
+          // Skip behind-camera / far projections that pin labels to wrong corners.
+          if (s.z < -1 || s.z > 1) continue;
           npcScreenPositions[i] = { x: (s.x * 0.5 + 0.5) * rect.width, y: (s.y * -0.5 + 0.5) * rect.height };
         }
       }
@@ -443,7 +1448,7 @@ export class SceneManager {
       const p = npcScreenPositions[selectedNpcIndex];
       if (Math.abs(p.x - (selectedPosition?.x ?? 0)) > 0.5 || Math.abs(p.y - (selectedPosition?.y ?? 0)) > 0.5) setSelectedPosition(p);
     } else if (selectedPosition !== null) setSelectedPosition(null);
-    this.stage.setChatMode(isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO);
+    this.stage.setChatMode(isChatting, this.controller?.getAgentState(player) === AgentBehavior.GOTO, delta);
     this.engine.render(this.stage.scene, this.stage.camera);
   }
 
@@ -451,6 +1456,22 @@ export class SceneManager {
     if (!this.controller) return;
     const count = this.controller.getCount(), buffer = this.controller.getAgentStateBuffer();
     if (!buffer) return;
+    const player = getActiveAgentSet().user.index;
+    const mirror = usePresenceStore.getState().mirrorMode;
+
+    // Companion mode: hide the unused player avatar (it was ghost-stacking with Cursor).
+    if (mirror) {
+      buffer.setAlpha(player, 0);
+      for (let i = 0; i < count; i++) {
+        if (i === player) continue;
+        const cur = buffer.getAlpha(i);
+        if (Math.abs(cur - 1) > 0.01) {
+          buffer.setAlpha(i, THREE.MathUtils.lerp(cur, 1, Math.min(delta * 3.0, 1.0)));
+        }
+      }
+      return;
+    }
+
     for (let i = 0; i < count; i++) {
       let overlap = false;
       for (let j = 0; j < count; j++) {
@@ -465,21 +1486,44 @@ export class SceneManager {
   public resetScene() {
     if (!this.controller) return;
     useUiStore.getState().setChatting(false);
+    this._endAmbientSession();
+    this.playerChatSession?.end();
+    this.playerChatSession = null;
+    if (this.waveReactTimeout) {
+      clearTimeout(this.waveReactTimeout);
+      this.waveReactTimeout = null;
+    }
     const set = getActiveAgentSet();
     getAllAgents(set).forEach((a) => this.controller?.setSpeaking(a.index, false));
     this.controller.warpAllToSpawn(set.user.index, getAllAgents(set).map(a => a.index));
     this.stage.setFollowTarget(null);
     this.stage.setChatSubjects(null, null);
     this.stage.setChatMode(false, false);
+    this.selectionRing?.update(null);
+    this.hoverRing?.update(null);
+    this.playerRing?.update(null);
   }
 
   public dispose() {
     this.isDisposed = true;
+    if (this.waveReactTimeout) {
+      clearTimeout(this.waveReactTimeout);
+      this.waveReactTimeout = null;
+    }
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      delete (window as unknown as { __laPresence?: unknown }).__laPresence;
+    }
     if (!this.readySettled) {
       this.settleReady(new Error('SceneManager disposed during initialization'));
     }
     this.resizeObserver.disconnect();
     this.unsubs.forEach(u => u());
+    this.selectionRing?.dispose();
+    this.selectionRing = null;
+    this.hoverRing?.dispose();
+    this.hoverRing = null;
+    this.playerRing?.dispose();
+    this.playerRing = null;
     this.inputManager?.dispose();
     this.inputManager = null;
     this.driverManager?.dispose();

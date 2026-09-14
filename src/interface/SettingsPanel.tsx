@@ -22,9 +22,10 @@ interface SettingsPanelProps {
   compact?: boolean;
   onReplayOnboarding?: () => void;
   onOpenShortcuts?: () => void;
+  onOpenAdvanced?: () => void;
 }
 
-const SettingsPanel: React.FC<SettingsPanelProps> = ({ compact, onReplayOnboarding, onOpenShortcuts }) => {
+const SettingsPanel: React.FC<SettingsPanelProps> = ({ compact, onReplayOnboarding, onOpenShortcuts, onOpenAdvanced }) => {
   const { isKanbanOpen, isLogOpen, setKanbanOpen, setLogOpen } = useCoreStore();
   const { themePreference, setThemePreference } = useUiStore();
   const activeTeam = useActiveTeam();
@@ -114,6 +115,29 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ compact, onReplayOnboardi
       </section>
 
       <CostDashboard />
+
+      {onOpenAdvanced ? (
+        <section className="apple-card p-5 transition-apple">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-9 h-9 rounded-xl bg-zinc-500/10 flex items-center justify-center">
+              <Users size={18} className="text-zinc-500" />
+            </div>
+            <div>
+              <h3 className="text-[15px] font-semibold" style={{ color: APPLE_TEXT }}>Advanced</h3>
+              <p className="text-[12px]" style={{ color: APPLE_TEXT_SECONDARY }}>
+                Optional BYOK runner and team designer
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenAdvanced}
+            className="w-full py-2.5 px-4 rounded-xl text-[13px] font-semibold text-zinc-600 bg-zinc-500/10 hover:bg-zinc-500/15 transition-apple"
+          >
+            Open Teams / Advanced mode
+          </button>
+        </section>
+      ) : null}
 
       {onOpenShortcuts ? (
         <section className="apple-card p-5 transition-apple">
